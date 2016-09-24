@@ -144,6 +144,7 @@ namespace klee {
     HANDLER(handleLArray);
     HANDLER(handleTraceArg);
     HANDLER(handleTraceRet);
+    HANDLER(handleTraceExtraPtr);
 #undef HANDLER
   };
 } // End klee namespace

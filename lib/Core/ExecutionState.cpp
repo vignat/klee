@@ -44,7 +44,8 @@ namespace {
 
 StackFrame::StackFrame(KInstIterator _caller, KFunction *_kf)
   : caller(_caller), kf(_kf), callPathNode(0), 
-    minDistToUncoveredOnReturn(0), varargs(0) {
+    minDistToUncoveredOnReturn(0), varargs(0),
+    outputTracePoint(0) {
   locals = new Cell[kf->numRegisters];
 }
 
@@ -54,7 +55,8 @@ StackFrame::StackFrame(const StackFrame &s)
     callPathNode(s.callPathNode),
     allocas(s.allocas),
     minDistToUncoveredOnReturn(s.minDistToUncoveredOnReturn),
-    varargs(s.varargs) {
+    varargs(s.varargs),
+    outputTracePoint(s.outputTracePoint){
   locals = new Cell[s.kf->numRegisters];
   for (unsigned i=0; i<s.kf->numRegisters; i++)
     locals[i] = s.locals[i];
@@ -68,6 +70,8 @@ StackFrame::~StackFrame() {
 
 ExecutionState::ExecutionState(KFunction *kf) :
     pc(kf->instructions),
+    layoutBuilder(),
+    callTrace(),
     prevPC(pc),
 
     queryCost(0.), 
@@ -100,6 +104,8 @@ ExecutionState::~ExecutionState() {
 ExecutionState::ExecutionState(const ExecutionState& state):
     fnAliases(state.fnAliases),
     pc(state.pc),
+    layoutBuilder(state.layoutBuilder),
+    callTrace(state.callTrace),
     prevPC(state.prevPC),
     stack(state.stack),
     incomingBBIndex(state.incomingBBIndex),
@@ -382,14 +388,39 @@ void ExecutionState::dumpStack(llvm::raw_ostream &out) const {
   }
 }
 
-void ExecutionState::traceArgument(uint64_t addr,
+void ExecutionState::traceArgument(ref<Expr> value,
                                    const std::string& name,
                                    uptr<MetaValue> layout) {
-  assert(false && "unimplemented");
+  assert(!stack.empty() && "Can not trace the main function.");
+  StackFrame* lastSF = &stack.back();
+  if (lastSF->outputTracePoint == nullptr) {
+    callTrace.emplace_back();
+    lastSF->outputTracePoint = &callTrace.back();
+  }
+  lastSF->outputTracePoint->traceArgument(name, std::move(layout), value, *this);
 }
 
 void ExecutionState::traceRetVal(uptr<MetaValue> layout) {
-  assert(false && "unimplemented");
+  assert(!stack.empty() && "Can not trace the main function.");
+  StackFrame* lastSF = &stack.back();
+  if (lastSF->outputTracePoint == nullptr) {
+    callTrace.emplace_back();
+    lastSF->outputTracePoint = &callTrace.back();
+  }
+  lastSF->outputTracePoint->setReturnLayout(std::move(layout));
+}
+
+void ExecutionState::traceExtraPtr(uint64_t addr,
+                                   const std::string& name,
+                                   uptr<MetaValue> layout) {
+  assert(!stack.empty() && "Can not trace the main function.");
+  StackFrame* lastSF = &stack.back();
+  if (lastSF->outputTracePoint == nullptr) {
+    callTrace.emplace_back();
+    lastSF->outputTracePoint = &callTrace.back();
+  }
+  lastSF->outputTracePoint->traceExtraPointer(name, std::move(layout),
+                                              addr, *this);
 }
 
 void ExecutionState::retFromSpecialFunction(KInstruction *target,

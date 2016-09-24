@@ -14,6 +14,10 @@
 
 using namespace klee;
 
+LayoutBuilder::LayoutBuilder(const LayoutBuilder& lb) {
+  assert(false && "unsupported");
+}
+
 int LayoutBuilder::plain(uint64_t) {
   assert(false && "unsupported");
   return 0;

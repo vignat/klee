@@ -159,7 +159,15 @@ extern "C" {
 
   /* Tracing */
 
-#define KLEE_TRACING_DEF_PROTO(suffix, type)	int klee_trace_def##suffix(type expr)
+  int klee_l_plain(enum KleeTraceType t);
+
+  int klee_l_ptr(int ptee_layout);
+  int klee_l_first_field(int val_layout, int offset, char* name);
+  int klee_l_next_field(int last_field, int val_layout, int offset, char* name);
+  int klee_l_array(int cell_ref, int len);
+
+#define KLEE_TRACING_DEF_PROTO(suffix, type)                    \
+  int klee_trace_arg##suffix(type expr, char* name, int layout)
 
   KLEE_TRACING_DEF_PROTO(f, float);
   KLEE_TRACING_DEF_PROTO(d, double);
@@ -170,18 +178,11 @@ extern "C" {
   KLEE_TRACING_DEF_PROTO(_i64, int64_t);
   KLEE_TRACING_DEF_PROTO(_ui32, int32_t);
   KLEE_TRACING_DEF_PROTO(_ui64, int64_t);
+  KLEE_TRACING_DEF_PROTO(p, void*);
 
 #undef KLEE_TRACING_DEF_PROTO
-
-  int klee_l_plain(enum KleeTraceType t);
-
-  int klee_l_ptr(int ptee_layout);
-  int klee_l_first_field(int val_layout, int offset, char* name);
-  int klee_l_next_field(int last_field, int val_layout, int offset, char* name);
-  int klee_l_array(int cell_ref, int len);
-
-  void klee_trace_arg(void* ptr, char* name, int layout);
   void klee_trace_ret(int layout);
+  void klee_trace_extra_ptr(void* ptr, char* name, int layout);
 #ifdef __cplusplus
 }
 #endif

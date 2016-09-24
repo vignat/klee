@@ -23,9 +23,6 @@ namespace klee {
 
   template<class T>
   using uptr = std::unique_ptr<T>;
-
-  template<class T>
-  using wptr = std::weak_ptr<T>;
 } // End klee namespace
 
 #endif //KLEE_TRACING_DEF_H

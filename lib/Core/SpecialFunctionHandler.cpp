@@ -119,8 +119,19 @@ static SpecialFunctionHandler::HandlerInfo handlerInfo[] = {
   add("klee_l_first_field", handleLFirstField, true),
   add("klee_l_next_field", handleLNextField, true),
   add("klee_l_array", handleLArray, true),
-  add("klee_trace_arg", handleTraceArg, false),
+  add("klee_trace_argf", handleTraceArg, false),
+  add("klee_trace_argd", handleTraceArg, false),
+  add("klee_trace_argl", handleTraceArg, false),
+  add("klee_trace_argll", handleTraceArg, false),
+  add("klee_trace_arg_i16", handleTraceArg, false),
+  add("klee_trace_arg_i32", handleTraceArg, false),
+  add("klee_trace_arg_i64", handleTraceArg, false),
+  add("klee_trace_arg_ui16", handleTraceArg, false),
+  add("klee_trace_arg_ui32", handleTraceArg, false),
+  add("klee_trace_arg_ui64", handleTraceArg, false),
+  add("klee_trace_arg_p", handleTraceArg, false),
   add("klee_trace_ret", handleTraceRet, false),
+  add("klee_trace_extra_ptr", handleTraceExtraPtr, false),
   add("malloc", handleMalloc, true),
   add("realloc", handleRealloc, true),
 
@@ -482,12 +493,6 @@ void SpecialFunctionHandler::handleTraceArg(ExecutionState &state,
                                    Executor::User);
   }
 
-  if (!isa<klee::ConstantExpr>(arguments[0])) {
-    executor.terminateStateOnError(state,
-                                   "Argument pointer must be concrete.",
-                                   Executor::User);
-  }
-
   if (!isa<klee::ConstantExpr>(arguments[1])) {
     executor.terminateStateOnError(state,
                                    "Argument name must be static concrete string.",
@@ -500,11 +505,11 @@ void SpecialFunctionHandler::handleTraceArg(ExecutionState &state,
                                    Executor::User);
   }
 
-  uint64_t argAddr = cast<ConstantExpr>(arguments[0])->getZExtValue();
+  ref<Expr> argVal = arguments[0];
   std::string name = readStringAtAddress(state, arguments[1]);
   uint64_t argLayoutHandler = cast<ConstantExpr>(arguments[2])->getZExtValue();
   uptr<MetaValue> layout = state.layoutBuilder.buildAndRemove(argLayoutHandler);
-  state.traceArgument(argAddr, name, std::move(layout));
+  state.traceArgument(argVal, name, std::move(layout));
 }
 
 void SpecialFunctionHandler::handleTraceRet(ExecutionState &state,
@@ -525,6 +530,45 @@ void SpecialFunctionHandler::handleTraceRet(ExecutionState &state,
   uint64_t retLayoutHandler = cast<ConstantExpr>(arguments[0])->getZExtValue();
   uptr<MetaValue> layout = state.layoutBuilder.buildAndRemove(retLayoutHandler);
   state.traceRetVal(std::move(layout));
+}
+
+void SpecialFunctionHandler::handleTraceExtraPtr(ExecutionState &state,
+                                                 KInstruction *target,
+                                                 std::vector<ref<Expr> >
+                                                 &arguments) {
+  if (arguments.size() != 3) {
+    executor.terminateStateOnError(state,
+                                   "invalid number of arguments to "
+                                   "klee_trace_extra_ptr",
+                                   Executor::User);
+  }
+
+  if (!isa<klee::ConstantExpr>(arguments[0])) {
+    executor.terminateStateOnError(state,
+                                   "Can trace only concrete addresses.",
+                                   Executor::User);
+  }
+  if (!isa<klee::ConstantExpr>(arguments[1])) {
+    executor.terminateStateOnError(state,
+                                   "Extra pointer name must be"
+                                   " static concrete string.",
+                                   Executor::User);
+  }
+
+
+  if (!isa<klee::ConstantExpr>(arguments[2])) {
+    executor.terminateStateOnError(state,
+                                   "Extra ptr layout handler must be concrete.",
+                                   Executor::User);
+  }
+
+  uint64_t extraPtr = cast<ConstantExpr>(arguments[0])->getZExtValue();
+  std::string name = readStringAtAddress(state, arguments[1]);
+  uint64_t extraPtrLayoutHandler =
+    cast<ConstantExpr>(arguments[2])->getZExtValue();
+  uptr<MetaValue> layout = state.layoutBuilder.
+    buildAndRemove(extraPtrLayoutHandler);
+  state.traceExtraPtr(extraPtr, name, std::move(layout));
 }
 
 void SpecialFunctionHandler::handleAssert(ExecutionState &state,

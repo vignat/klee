@@ -19,6 +19,9 @@ namespace klee {
 
   class LayoutBuilder {
   public:
+    LayoutBuilder() = default;
+    LayoutBuilder(const LayoutBuilder& lb);
+
     int plain(uint64_t);
     int ptr(int ptee);
     int firstField(int valLayout, int offset, const std::string& name);

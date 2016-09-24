@@ -1540,6 +1540,10 @@ void Executor::executeInstruction(ExecutionState &state, KInstruction *ki) {
       assert(!caller && "caller set on initial stack frame");
       terminateStateOnExit(state);
     } else {
+      StackFrame* lastSF = &(*state.stack.rbegin());
+      if (lastSF->outputTracePoint != nullptr)
+        lastSF->outputTracePoint->traceFunOutput(result, state);
+
       state.popFrame();
 
       if (statsTracker)

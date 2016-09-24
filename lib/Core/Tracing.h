@@ -26,14 +26,13 @@ namespace klee {
 
   /// MetaValue -- holds the memory layout for one element in the hierarchy.
   class MetaValue {
-
-  protected:
-
   public:
-    MetaValue(Expr::Width width);
-    virtual ~MetaValue();
+    MetaValue() = default;
+    MetaValue(const MetaValue&) = default;
+    virtual ~MetaValue() = default;
 
-    virtual uptr<RuntimeValue> ReadValue(uint64_t addr, ExecutionState *state) const;
+    virtual uptr<RuntimeValue> ReadValue(ref<Expr> val,
+                                         ExecutionState *state) const = 0;
   };
 
   /// MetaStructure -- holds the memory layout for a structure
@@ -46,7 +45,8 @@ namespace klee {
     TracingMap<unsigned, uptr<MetaStructureField> > fields;
 
   public:
-    virtual uptr<RuntimeValue> ReadValue(uint64_t addr, ExecutionState *state) const;
+    virtual uptr<RuntimeValue> ReadValue(ref<Expr> val,
+                                         ExecutionState *state) const;
   };
 
   /// MetaArray -- holds the memory layout for an array
@@ -55,7 +55,8 @@ namespace klee {
     uint64_t len;
 
   public:
-    virtual uptr<RuntimeValue> ReadValue(uint64_t addr, ExecutionState *state) const;
+    virtual uptr<RuntimeValue> ReadValue(ref<Expr> val,
+                                         ExecutionState *state) const;
   };
 
   /// MetaPointer -- holds the memory layout for a pointer
@@ -63,7 +64,8 @@ namespace klee {
     uptr<MetaValue> ptee;
 
   public:
-    virtual uptr<RuntimeValue> ReadValue(uint64_t addr, ExecutionState *state) const;
+    virtual uptr<RuntimeValue> ReadValue(ref<Expr> val,
+                                         ExecutionState *state) const;
   };
 
   /// MetaPlainVal -- holds the memory layout for a plain value.
@@ -72,18 +74,19 @@ namespace klee {
     bool is_signed;
 
   public:
-    virtual uptr<RuntimeValue> ReadValue(uint64_t addr, ExecutionState *state) const;
+    virtual uptr<RuntimeValue> ReadValue(ref<Expr> val,
+                                         ExecutionState *state) const;
   };
 
 
   class RuntimeValue {
   protected:
-    wptr<MetaValue> layout;
+    MetaValue *layout;
   public:
     virtual ~RuntimeValue();
     virtual bool dumpToStream(llvm::raw_ostream& file);
     virtual bool eq(const class RuntimeValue& other) const;
-    virtual SymbolSet&& getSymbols() const;
+    virtual SymbolSet&& collectSymbols() const;
   };
 
   // StructureValue -- holds runtime value of a structure object.
@@ -93,6 +96,7 @@ namespace klee {
   public:
     virtual bool dumpToStream(llvm::raw_ostream& file);
     virtual bool eq(const class RuntimeValue& other) const;
+    virtual SymbolSet&& collectSymbols() const;
   };
 
   /// ArrayValue -- holds runtime value for an array;
@@ -102,34 +106,66 @@ namespace klee {
   public:
     virtual bool dumpToStream(llvm::raw_ostream& file);
     virtual bool eq(const class RuntimeValue& other) const;
+    virtual SymbolSet&& collectSymbols() const;
   };
 
-  class PointerValoue :public RuntimeValue {
+  class PointerValue :public RuntimeValue {
     uptr<RuntimeValue> ptee;
 
   public:
     virtual bool dumpToStream(llvm::raw_ostream& file);
     virtual bool eq(const class RuntimeValue& other) const;
+    virtual SymbolSet&& collectSymbols() const;
+  };
+
+  class PlainValue :public RuntimeValue {
+    ref<Expr> val;
+
+  public:
+    virtual bool dumpToStream(llvm::raw_ostream& file);
+    virtual bool eq(const class RuntimeValue& other) const;
+    virtual SymbolSet&& collectSymbols() const;
   };
 
   class CallInfo {
-    TracingMap<std::string, uptr<MetaValue> > argsLayout;
+  public:
+    CallInfo() = default;
+    CallInfo(const CallInfo& ci);
+
+    void traceArgument(std::string name, uptr<MetaValue> layout,
+                       ref<Expr> val, const ExecutionState &state);
+    void setReturnLayout(uptr<MetaValue> layout);
+    void traceExtraPointer(std::string name, uptr<MetaValue> layout,
+                           uint64_t addr, const ExecutionState &state);
+
+
+    void traceFunOutput(ref<Expr> retValue, const ExecutionState &state);
+  private:
+    struct StructuredArg {
+      uptr<MetaValue> layout;
+      ref<Expr> value;
+    };
+    struct StructuredPtr {
+      uptr<MetaValue> layout;
+      uint64_t addr;
+      std::string name;
+    };
+    TracingMap<std::string, StructuredArg > argsLayout;
     TracingMap<std::string, uptr<RuntimeValue> > argsBeforeCall;
     TracingMap<std::string, uptr<RuntimeValue> > argsAfterCall;
+
+    std::vector<StructuredPtr> extraPtrs;
+    std::vector<StructuredPtr> extraPtrsBeforeCall;
+    std::vector<StructuredPtr> extraPtrsAfterCall;
+
 
     uptr<MetaValue> retLayout;
     uptr<RuntimeValue> retValue;
 
+    std::vector< ref<Expr> > callContext;
+    std::vector< ref<Expr> > returnContext;
+
     std::string funName;
-
-  public:
-
-    void traceArgument(std::string name, uptr<MetaValue> layout,
-                       ref<Expr> value, const ExecutionState &state);
-    void setReturnLayout(uptr<MetaValue> layout);
-
-
-    void traceFunOutput(ref<Expr> retValue);
   };
 
 } // End klee namespace

@@ -27,6 +27,7 @@
 namespace klee {
 class Array;
 class CallPathNode;
+class CallInfo;
 struct Cell;
 struct KFunction;
 struct KInstruction;
@@ -58,6 +59,8 @@ struct StackFrame {
   // of intrinsic lowering.
   MemoryObject *varargs;
 
+  CallInfo *outputTracePoint;
+
   StackFrame(KInstIterator caller, KFunction *kf);
   StackFrame(const StackFrame &s);
   ~StackFrame();
@@ -83,6 +86,10 @@ public:
 
   /// @brief A builder for gradual definition of traced memory layout.
   LayoutBuilder layoutBuilder;
+
+  /// @brief A trace of the chosen API functions
+  /// (annotated by klee_trace_arg, klee_trace_ret).
+  std::vector<CallInfo> callTrace;
 
   /// @brief Pointer to instruction which is currently executed
   KInstIterator prevPC;
@@ -150,10 +157,13 @@ public:
   void addFnAlias(std::string old_fn, std::string new_fn);
   void removeFnAlias(std::string fn);
 
-  void traceArgument(uint64_t addr,
+  void traceArgument(ref<Expr>,
                      const std::string& name,
                      uptr<MetaValue> layout);
   void traceRetVal(uptr<MetaValue> layout);
+  void traceExtraPtr(uint64_t addr,
+                     const std::string& name,
+                     uptr<MetaValue> layout);
   void retFromSpecialFunction(KInstruction *target,
                               ref<Expr> retVal);
 
