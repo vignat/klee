@@ -16,6 +16,8 @@
 
 // FIXME: We do not want to be exposing these? :(
 #include "../../lib/Core/AddressSpace.h"
+#include "../../lib/Core/Tracing.h"
+#include "../../lib/Core/LayoutBuilder.h"
 #include "klee/Internal/Module/KInstIterator.h"
 
 #include <map>
@@ -78,6 +80,9 @@ public:
   /// @brief Pointer to instruction to be executed after the current
   /// instruction
   KInstIterator pc;
+
+  /// @brief A builder for gradual definition of traced memory layout.
+  LayoutBuilder layoutBuilder;
 
   /// @brief Pointer to instruction which is currently executed
   KInstIterator prevPC;
@@ -144,6 +149,13 @@ public:
   std::string getFnAlias(std::string fn);
   void addFnAlias(std::string old_fn, std::string new_fn);
   void removeFnAlias(std::string fn);
+
+  void traceArgument(uint64_t addr,
+                     const std::string& name,
+                     uptr<MetaValue> layout);
+  void traceRetVal(uptr<MetaValue> layout);
+  void retFromSpecialFunction(KInstruction *target,
+                              ref<Expr> retVal);
 
 private:
   ExecutionState() : ptreeNode(0) {}

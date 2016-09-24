@@ -13,6 +13,8 @@
 #include "stdint.h"
 #include "stddef.h"
 
+#include "tracing_definitions.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -154,6 +156,32 @@ extern "C" {
 
   /* Merge current states together if possible */
   void klee_merge();
+
+  /* Tracing */
+
+#define KLEE_TRACING_DEF_PROTO(suffix, type)	int klee_trace_def##suffix(type expr)
+
+  KLEE_TRACING_DEF_PROTO(f, float);
+  KLEE_TRACING_DEF_PROTO(d, double);
+  KLEE_TRACING_DEF_PROTO(l, long);
+  KLEE_TRACING_DEF_PROTO(ll, long long);
+  KLEE_TRACING_DEF_PROTO(_i16, int32_t);
+  KLEE_TRACING_DEF_PROTO(_i32, int32_t);
+  KLEE_TRACING_DEF_PROTO(_i64, int64_t);
+  KLEE_TRACING_DEF_PROTO(_ui32, int32_t);
+  KLEE_TRACING_DEF_PROTO(_ui64, int64_t);
+
+#undef KLEE_TRACING_DEF_PROTO
+
+  int klee_l_plain(enum KleeTraceType t);
+
+  int klee_l_ptr(int ptee_layout);
+  int klee_l_first_field(int val_layout, int offset, char* name);
+  int klee_l_next_field(int last_field, int val_layout, int offset, char* name);
+  int klee_l_array(int cell_ref, int len);
+
+  void klee_trace_arg(void* ptr, char* name, int layout);
+  void klee_trace_ret(int layout);
 #ifdef __cplusplus
 }
 #endif

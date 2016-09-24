@@ -1,4 +1,4 @@
-//===-- Context.h -----------------------------------------------*- C++ -*-===//
+//===-- Tracing.h -----------------------------------------------*- C++ -*-===//
 //
 //                     The KLEE Symbolic Virtual Machine
 //
@@ -14,34 +14,26 @@
 #include <string>
 #include <vector>
 
+#include "TracingDefs.h"
 #include "klee/Expr.h"
 #include "klee/ExecutionState.h"
 #include "klee/util/GetExprSymbols.h"
 
 namespace klee {
 
-  template<class K, class V>
-  using TracingMap = std::map<K,V>;
-
-  template<class T>
-  using uptr = std::unique_ptr<T>;
-
-  template<class T>
-  using wptr = std::weak_ptr<T>;
-
-  class Value;
+  class RuntimeValue;
   class MetaValue;
 
   /// MetaValue -- holds the memory layout for one element in the hierarchy.
   class MetaValue {
 
   protected:
-    Expr::Width width;
 
   public:
+    MetaValue(Expr::Width width);
     virtual ~MetaValue();
 
-    virtual uptr<Value> ReadValue(uint64_t addr, ExecutionState *state) const;
+    virtual uptr<RuntimeValue> ReadValue(uint64_t addr, ExecutionState *state) const;
   };
 
   /// MetaStructure -- holds the memory layout for a structure
@@ -54,7 +46,7 @@ namespace klee {
     TracingMap<unsigned, uptr<MetaStructureField> > fields;
 
   public:
-    virtual uptr<Value> ReadValue(uint64_t addr, ExecutionState *state) const;
+    virtual uptr<RuntimeValue> ReadValue(uint64_t addr, ExecutionState *state) const;
   };
 
   /// MetaArray -- holds the memory layout for an array
@@ -63,7 +55,7 @@ namespace klee {
     uint64_t len;
 
   public:
-    virtual uptr<Value> ReadValue(uint64_t addr, ExecutionState *state) const;
+    virtual uptr<RuntimeValue> ReadValue(uint64_t addr, ExecutionState *state) const;
   };
 
   /// MetaPointer -- holds the memory layout for a pointer
@@ -71,15 +63,16 @@ namespace klee {
     uptr<MetaValue> ptee;
 
   public:
-    virtual uptr<Value> ReadValue(uint64_t addr, ExecutionState *state) const;
+    virtual uptr<RuntimeValue> ReadValue(uint64_t addr, ExecutionState *state) const;
   };
 
   /// MetaPlainVal -- holds the memory layout for a plain value.
   class MetaPlainVal :public MetaValue {
+    Expr::Width width;
     bool is_signed;
 
   public:
-    virtual uptr<Value> ReadValue(uint64_t addr, ExecutionState *state) const;
+    virtual uptr<RuntimeValue> ReadValue(uint64_t addr, ExecutionState *state) const;
   };
 
 
@@ -89,26 +82,26 @@ namespace klee {
   public:
     virtual ~RuntimeValue();
     virtual bool dumpToStream(llvm::raw_ostream& file);
-    virtual bool eq(const class Value& other) const;
+    virtual bool eq(const class RuntimeValue& other) const;
     virtual SymbolSet&& getSymbols() const;
   };
 
   // StructureValue -- holds runtime value of a structure object.
   class StructureValue :public RuntimeValue {
-    TracingMap<unsigned, uptr<Value> > fields;
+    TracingMap<unsigned, uptr<RuntimeValue> > fields;
 
   public:
     virtual bool dumpToStream(llvm::raw_ostream& file);
-    virtual bool eq(const class Value& other) const;
+    virtual bool eq(const class RuntimeValue& other) const;
   };
 
   /// ArrayValue -- holds runtime value for an array;
   class ArrayValue :public RuntimeValue {
-    std::vector<uptr<Value> > cells;
+    std::vector<uptr<RuntimeValue> > cells;
 
   public:
     virtual bool dumpToStream(llvm::raw_ostream& file);
-    virtual bool eq(const class Value& other) const;
+    virtual bool eq(const class RuntimeValue& other) const;
   };
 
   class PointerValoue :public RuntimeValue {
@@ -116,24 +109,29 @@ namespace klee {
 
   public:
     virtual bool dumpToStream(llvm::raw_ostream& file);
-    virtual bool eq(const class Value& other) const;
+    virtual bool eq(const class RuntimeValue& other) const;
   };
 
-  // Value -- holds runtime value for a memory element;
-  class Value {
-    MetaValue* layout;
+  class CallInfo {
+    TracingMap<std::string, uptr<MetaValue> > argsLayout;
+    TracingMap<std::string, uptr<RuntimeValue> > argsBeforeCall;
+    TracingMap<std::string, uptr<RuntimeValue> > argsAfterCall;
 
-    ref<Expr> plain;
-    uint64_t pointer;
+    uptr<MetaValue> retLayout;
+    uptr<RuntimeValue> retValue;
+
     std::string funName;
-    ArrayValue arr;
-    StructureValue str;
-    Value* ptee;
 
   public:
-    bool dumpToStream(llvm::raw_ostream& file);
-    bool eq(const class Value& other) const;
+
+    void traceArgument(std::string name, uptr<MetaValue> layout,
+                       ref<Expr> value, const ExecutionState &state);
+    void setReturnLayout(uptr<MetaValue> layout);
+
+
+    void traceFunOutput(ref<Expr> retValue);
   };
+
 } // End klee namespace
 
-#endif //KLEE_TRACING
+#endif //KLEE_TRACING_H

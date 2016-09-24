@@ -114,6 +114,13 @@ static SpecialFunctionHandler::HandlerInfo handlerInfo[] = {
   add("klee_warning", handleWarning, false),
   add("klee_warning_once", handleWarningOnce, false),
   add("klee_alias_function", handleAliasFunction, false),
+  add("klee_l_plain", handleLPlain, true),
+  add("klee_l_ptr", handleLPtr, true),
+  add("klee_l_first_field", handleLFirstField, true),
+  add("klee_l_next_field", handleLNextField, true),
+  add("klee_l_array", handleLArray, true),
+  add("klee_trace_arg", handleTraceArg, false),
+  add("klee_trace_ret", handleTraceRet, false),
   add("malloc", handleMalloc, true),
   add("realloc", handleRealloc, true),
 
@@ -312,10 +319,218 @@ void SpecialFunctionHandler::handleAliasFunction(ExecutionState &state,
   else state.addFnAlias(old_fn, new_fn);
 }
 
+void SpecialFunctionHandler::handleLPlain(ExecutionState &state,
+                                          KInstruction *target,
+                                          std::vector<ref<Expr> > &arguments) {
+  if (arguments.size() != 1) {
+    executor.terminateStateOnError(state,
+                                   "invalid number of arguments to klee_l_plain",
+                                   Executor::User);
+  }
+
+  if (!isa<klee::ConstantExpr>(arguments[0])) {
+    executor.terminateStateOnError(state,
+                                   "Plain type must be a static constant - enum member.",
+                                   Executor::User);
+  }
+
+  uint64_t plain_type = cast<ConstantExpr>(arguments[0])->getZExtValue();
+  if ((signed)plain_type < KLEE_TRACE_FIRST_TYPE ||
+      KLEE_TRACE_LAST_TYPE < plain_type) {
+    executor.terminateStateOnError(state,
+                                   "Plain type is not member of the enum.",
+                                   Executor::User);
+  }
+
+  int idx = state.layoutBuilder.plain(plain_type);
+  state.retFromSpecialFunction(target, ConstantExpr::alloc(idx, Expr::Int32));
+}
+
+void SpecialFunctionHandler::handleLPtr(ExecutionState &state,
+                                        KInstruction *target,
+                                        std::vector<ref<Expr> > &arguments) {
+  if (arguments.size() != 1) {
+   executor.terminateStateOnError(state,
+                                   "invalid number of arguments to klee_l_ptr",
+                                   Executor::User);
+  }
+
+  if (!isa<klee::ConstantExpr>(arguments[0])) {
+    executor.terminateStateOnError(state,
+                                   "Ptee layout handler must be concrete.",
+                                   Executor::User);
+  }
+
+  uint64_t pteeLayout = cast<ConstantExpr>(arguments[0])->getZExtValue();
+  int idx = state.layoutBuilder.ptr(pteeLayout);
+  state.retFromSpecialFunction(target, ConstantExpr::alloc(idx, Expr::Int32));
+}
+
+void SpecialFunctionHandler::handleLFirstField(ExecutionState &state,
+                                               KInstruction *target,
+                                               std::vector<ref<Expr> > &arguments) {
+  if (arguments.size() != 3) {
+    executor.terminateStateOnError(state,
+                                   "invalid number of arguments to "
+                                   "klee_l_first_field",
+                                   Executor::User);
+  }
+
+  if (!isa<klee::ConstantExpr>(arguments[0])) {
+    executor.terminateStateOnError(state,
+                                   "Value layout handler must be concrete.",
+                                   Executor::User);
+  }
+
+  if (!isa<klee::ConstantExpr>(arguments[1])) {
+    executor.terminateStateOnError(state,
+                                   "Offset must be concrete.",
+                                   Executor::User);
+  }
+
+  if (!isa<klee::ConstantExpr>(arguments[2])) {
+    executor.terminateStateOnError(state,
+                                   "Field name must be a static concrete string.",
+                                   Executor::User);
+  }
+
+  uint64_t valLayout = cast<ConstantExpr>(arguments[0])->getZExtValue();
+  uint64_t offset = cast<ConstantExpr>(arguments[1])->getZExtValue();
+  std::string name = readStringAtAddress(state, arguments[2]);
+  int idx = state.layoutBuilder.firstField(valLayout, offset, name);
+  state.retFromSpecialFunction(target, ConstantExpr::alloc(idx, Expr::Int32));
+}
+
+void SpecialFunctionHandler::handleLNextField(ExecutionState &state,
+                                              KInstruction *target,
+                                              std::vector<ref<Expr> > &arguments) {
+  if (arguments.size() != 4) {
+    executor.terminateStateOnError(state,
+                                   "invalid number of arguments to "
+                                   "klee_l_next_field",
+                                   Executor::User);
+  }
+
+  if (!isa<klee::ConstantExpr>(arguments[0])) {
+    executor.terminateStateOnError(state,
+                                   "Last field layout handler must be concrete.",
+                                   Executor::User);
+  }
+
+  if (!isa<klee::ConstantExpr>(arguments[1])) {
+    executor.terminateStateOnError(state,
+                                   "Value layout handler must be concrete.",
+                                   Executor::User);
+  }
+
+  if (!isa<klee::ConstantExpr>(arguments[2])) {
+    executor.terminateStateOnError(state,
+                                   "Offset must be concrete.",
+                                   Executor::User);
+  }
+
+  if (!isa<klee::ConstantExpr>(arguments[3])) {
+    executor.terminateStateOnError(state,
+                                   "Field name must be a static concrete string.",
+                                   Executor::User);
+  }
+
+  uint64_t lastFieldLayout = cast<ConstantExpr>(arguments[0])->getZExtValue();
+  uint64_t valLayout = cast<ConstantExpr>(arguments[1])->getZExtValue();
+  uint64_t offset = cast<ConstantExpr>(arguments[2])->getZExtValue();
+  std::string name = readStringAtAddress(state, arguments[3]);
+  int idx = state.layoutBuilder.nextField(lastFieldLayout,
+                                          valLayout,
+                                          offset,
+                                          name);
+  state.retFromSpecialFunction(target, ConstantExpr::alloc(idx, Expr::Int32));
+}
+
+void SpecialFunctionHandler::handleLArray(ExecutionState &state,
+                                          KInstruction *target,
+                                          std::vector<ref<Expr> > &arguments) {
+  if (arguments.size() != 2) {
+    executor.terminateStateOnError(state,
+                                   "invalid number of arguments to klee_l_array",
+                                   Executor::User);
+  }
+
+  if (!isa<klee::ConstantExpr>(arguments[0])) {
+    executor.terminateStateOnError(state,
+                                   "Cell layout handler must be concrete.",
+                                   Executor::User);
+  }
+
+  if (!isa<klee::ConstantExpr>(arguments[1])) {
+    executor.terminateStateOnError(state,
+                                   "Array length must be concrete.",
+                                   Executor::User);
+  }
+
+  uint64_t cellLayout = cast<ConstantExpr>(arguments[0])->getZExtValue();
+  uint64_t length = cast<ConstantExpr>(arguments[1])->getZExtValue();
+  int idx = state.layoutBuilder.array(cellLayout, length);
+  state.retFromSpecialFunction(target, ConstantExpr::alloc(idx, Expr::Int32));
+}
+
+void SpecialFunctionHandler::handleTraceArg(ExecutionState &state,
+                                            KInstruction *target,
+                                            std::vector<ref<Expr> > &arguments) {
+  if (arguments.size() != 3) {
+    executor.terminateStateOnError(state,
+                                   "invalid number of arguments to klee_trace_arg",
+                                   Executor::User);
+  }
+
+  if (!isa<klee::ConstantExpr>(arguments[0])) {
+    executor.terminateStateOnError(state,
+                                   "Argument pointer must be concrete.",
+                                   Executor::User);
+  }
+
+  if (!isa<klee::ConstantExpr>(arguments[1])) {
+    executor.terminateStateOnError(state,
+                                   "Argument name must be static concrete string.",
+                                   Executor::User);
+  }
+
+  if (!isa<klee::ConstantExpr>(arguments[2])) {
+    executor.terminateStateOnError(state,
+                                   "Arg layout handler must be concrete.",
+                                   Executor::User);
+  }
+
+  uint64_t argAddr = cast<ConstantExpr>(arguments[0])->getZExtValue();
+  std::string name = readStringAtAddress(state, arguments[1]);
+  uint64_t argLayoutHandler = cast<ConstantExpr>(arguments[2])->getZExtValue();
+  uptr<MetaValue> layout = state.layoutBuilder.buildAndRemove(argLayoutHandler);
+  state.traceArgument(argAddr, name, std::move(layout));
+}
+
+void SpecialFunctionHandler::handleTraceRet(ExecutionState &state,
+                                            KInstruction *target,
+                                            std::vector<ref<Expr> > &arguments) {
+  if (arguments.size() != 1) {
+    executor.terminateStateOnError(state,
+                                   "invalid number of arguments to klee_trace_ret",
+                                   Executor::User);
+  }
+
+  if (!isa<klee::ConstantExpr>(arguments[0])) {
+    executor.terminateStateOnError(state,
+                                   "Ret layout handler must be concrete.",
+                                   Executor::User);
+  }
+
+  uint64_t retLayoutHandler = cast<ConstantExpr>(arguments[0])->getZExtValue();
+  uptr<MetaValue> layout = state.layoutBuilder.buildAndRemove(retLayoutHandler);
+  state.traceRetVal(std::move(layout));
+}
+
 void SpecialFunctionHandler::handleAssert(ExecutionState &state,
                                           KInstruction *target,
                                           std::vector<ref<Expr> > &arguments) {
-  assert(arguments.size()==3 && "invalid number of arguments to _assert");  
+  assert(arguments.size()==3 && "invalid number of arguments to _assert");
   executor.terminateStateOnError(state,
 				 "ASSERTION FAIL: " + readStringAtAddress(state, arguments[0]),
 				 Executor::Assert);

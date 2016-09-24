@@ -381,3 +381,19 @@ void ExecutionState::dumpStack(llvm::raw_ostream &out) const {
     target = sf.caller;
   }
 }
+
+void ExecutionState::traceArgument(uint64_t addr,
+                                   const std::string& name,
+                                   uptr<MetaValue> layout) {
+  assert(false && "unimplemented");
+}
+
+void ExecutionState::traceRetVal(uptr<MetaValue> layout) {
+  assert(false && "unimplemented");
+}
+
+void ExecutionState::retFromSpecialFunction(KInstruction *target,
+                                            ref<Expr> retVal) {
+  stack.back().locals[target->dest].value = retVal;
+}
+
