@@ -14,6 +14,7 @@
 #include <string>
 #include <vector>
 #include <list>
+#include <llvm/Support/Casting.h>
 
 #include "TracingDefs.h"
 #include "klee/Expr.h"
@@ -55,6 +56,9 @@ namespace klee {
     virtual uptr<RuntimeValue> readValueByPtr(size_t addr,
                                               ExecutionState *state) const = 0;
     virtual Expr::Width calculateWidth() const;
+
+    bool getFieldName(size_t offset,
+                      const std::string **outName) const;
   };
 
   /// MetaArray -- holds the memory layout for an array
@@ -66,6 +70,8 @@ namespace klee {
     virtual uptr<RuntimeValue> readValue(ref<Expr> val,
                                          ExecutionState *state) const;
     virtual Expr::Width calculateWidth() const;
+
+    size_t getLen() const { return len; }
   };
 
   /// MetaPointer -- holds the memory layout for a pointer
@@ -87,72 +93,102 @@ namespace klee {
     virtual uptr<RuntimeValue> readValue(ref<Expr> val,
                                          ExecutionState *state) const;
     virtual Expr::Width calculateWidth() const;
+
+    Expr::Width getWidth() const { return width; }
+    bool isSigned() const { return is_signed; }
   };
 
 
   class RuntimeValue {
   protected:
-    const MetaValue *layout;
   public:
-    RuntimeValue(const MetaValue* layout_):layout(layout_) {}
+    enum RuntimeValueKind {
+      RVK_STRUCT,
+      RVK_ARRAY,
+      RVK_POINTER,
+      RVK_PLAIN
+    };
+
+    RuntimeValue(RuntimeValueKind k):kind(k) {}
     virtual ~RuntimeValue() {};
-    virtual bool dumpToStream(llvm::raw_ostream& file) = 0;
+    virtual void dumpToStream(llvm::raw_ostream& file) const = 0;
     virtual bool eq(const class RuntimeValue& other) const = 0;
     virtual SymbolSet collectSymbols() const = 0;
+    RuntimeValueKind getKind() const { return kind; }
+  private:
+    RuntimeValueKind kind;
   };
 
   // StructureValue -- holds runtime value of a structure object.
   class StructureValue :public RuntimeValue {
+    const MetaStructure *layout;
     TracingMap<size_t, uptr<RuntimeValue> > fields;
 
   public:
-    StructureValue(const MetaStructure* layout_):RuntimeValue(layout_) {}
+    StructureValue(const MetaStructure* layout_):RuntimeValue(RVK_STRUCT),
+                                                 layout(layout_) {}
 
     void addField(size_t offset, uptr<RuntimeValue> value);
 
-    virtual bool dumpToStream(llvm::raw_ostream& file);
+    virtual void dumpToStream(llvm::raw_ostream& file) const;
     virtual bool eq(const class RuntimeValue& other) const;
     virtual SymbolSet collectSymbols() const;
+    static bool classof(const RuntimeValue *rv)
+    { return rv->getKind() == RVK_STRUCT; }
   };
 
   /// ArrayValue -- holds runtime value for an array;
   class ArrayValue :public RuntimeValue {
+    const MetaArray *layout;
     std::vector<uptr<RuntimeValue> > cells;
 
   public:
     ArrayValue(const MetaArray *layout_,
-               size_t length): RuntimeValue(layout_),
+               size_t length): RuntimeValue(RVK_ARRAY),
+                               layout(layout_),
                                cells(length){}
 
     void setCell(size_t index, uptr<RuntimeValue> value);
 
-    virtual bool dumpToStream(llvm::raw_ostream& file);
+    virtual void dumpToStream(llvm::raw_ostream& file) const;
     virtual bool eq(const class RuntimeValue& other) const;
     virtual SymbolSet collectSymbols() const;
+    static bool classof(const RuntimeValue *rv)
+    { return rv->getKind() == RVK_ARRAY; }
   };
 
   class PointerValue :public RuntimeValue {
+    const MetaPointer *layout;
     uptr<RuntimeValue> ptee;
+    ref<Expr> value;
 
   public:
-    PointerValue(const MetaPointer *layout_):RuntimeValue(layout_) {}
+    PointerValue(const MetaPointer *layout_):RuntimeValue(RVK_POINTER),
+                                             layout(layout_) {}
 
     void setPtee(uptr<RuntimeValue> ptee);
 
-    virtual bool dumpToStream(llvm::raw_ostream& file);
+    virtual void dumpToStream(llvm::raw_ostream& file) const;
     virtual bool eq(const class RuntimeValue& other) const;
     virtual SymbolSet collectSymbols() const;
+    static bool classof(const RuntimeValue *rv)
+    { return rv->getKind() == RVK_POINTER; }
   };
 
   class PlainValue :public RuntimeValue {
+    const MetaPlainVal *layout;
     ref<Expr> val;
 
   public:
     PlainValue(const MetaPlainVal *layout_,
-               ref<Expr> val_):RuntimeValue(layout_), val(val_) {}
-    virtual bool dumpToStream(llvm::raw_ostream& file);
+               ref<Expr> val_):RuntimeValue(RVK_PLAIN),
+                               layout(layout_),
+                               val(val_) {}
+    virtual void dumpToStream(llvm::raw_ostream& file) const;
     virtual bool eq(const class RuntimeValue& other) const;
     virtual SymbolSet collectSymbols() const;
+    static bool classof(const RuntimeValue *rv)
+    { return rv->getKind() == RVK_PLAIN; }
   };
 
   class CallInfo {

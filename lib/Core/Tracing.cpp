@@ -49,6 +49,16 @@ Expr::Width MetaStructure::calculateWidth() const {
   return width;
 }
 
+bool MetaStructure::getFieldName(size_t offset,
+                                 const std::string **outName) const {
+  const auto& field = fields.find(offset);
+  if (field != fields.end()) {
+    *outName = &field->second->name;
+    return true;
+  }
+  return false;
+}
+
 uptr<RuntimeValue> MetaArray::readValue(ref<Expr> val,
                                         ExecutionState *state) const {
   uptr<ArrayValue> ret(new ArrayValue(this, len));
@@ -97,76 +107,122 @@ Expr::Width MetaPlainVal::calculateWidth() const {
 }
 
 void StructureValue::addField(size_t offset, uptr<RuntimeValue> value) {
-  assert(false && "unimplemeted");
+  assert(fields.find(offset) == fields.end());
+  fields.emplace(offset, std::move(value));
 }
 
-bool StructureValue::dumpToStream(llvm::raw_ostream& file) {
-  assert(false && "unimplemeted");
-  return false;
+void StructureValue::dumpToStream(llvm::raw_ostream& file) const {
+  file << "(";
+  const std::string *name = nullptr;
+  for (const auto& fieldI : fields) {
+    bool found = layout->getFieldName(fieldI.first, &name);
+    assert(found);
+    file <<"(" <<*name <<" ";
+    fieldI.second->dumpToStream(file);
+    file <<")\n";
+  }
+  file << ")";
 }
 
 bool StructureValue::eq(const class RuntimeValue& other) const {
-  assert(false && "unimplemeted");
+  if (const StructureValue * otherStr =
+      dyn_cast<const StructureValue>(&other)) {
+    if (fields.size() != otherStr->fields.size()) return false;
+    for (const auto& fieldPair : fields) {
+      auto otherIter = otherStr->fields.find(fieldPair.first);
+      if (otherIter == otherStr->fields.end()) return false;
+      if (!fieldPair.second->eq(*otherIter->second)) return false;
+    }
+    return true;
+  }
   return false;
 }
 
 SymbolSet StructureValue::collectSymbols() const {
-  assert(false && "unimplemeted");
-  return SymbolSet();
+  SymbolSet ret;
+  for (const auto& fieldPair : fields) {
+    SymbolSet fieldSymbols = fieldPair.second->collectSymbols();
+    ret.insert(fieldSymbols.begin(), fieldSymbols.end());
+  }
+  return ret;
 }
 
 void ArrayValue::setCell(size_t index, uptr<RuntimeValue> value) {
-  assert(false && "unimplemeted");
+  cells[index] = std::move(value);
 }
 
-bool ArrayValue::dumpToStream(llvm::raw_ostream& file) {
-  assert(false && "unimplemeted");
-  return false;
+void ArrayValue::dumpToStream(llvm::raw_ostream& file) const {
+  assert(layout->getLen() == cells.size());
+  file << "((length " <<cells.size() << ")\n(data \n";
+  for (const auto& cell : cells) {
+    cell->dumpToStream(file);
+    file <<" ";
+  }
+  file <<")";
 }
 
 bool ArrayValue::eq(const class RuntimeValue& other) const {
-  assert(false && "unimplemeted");
+  if (const ArrayValue *otherArr =
+      dyn_cast<const ArrayValue>(&other)) {
+    if (cells.size() != otherArr->cells.size()) return false;
+    for (size_t i = 0; i < cells.size(); ++i) {
+      if (!cells[i]->eq(*otherArr->cells[i])) return false;
+    }
+    return true;
+  }
   return false;
 }
 
 SymbolSet ArrayValue::collectSymbols() const {
-  assert(false && "unimplemeted");
-  return SymbolSet();
+  SymbolSet ret;
+  for (const auto& cell : cells) {
+    SymbolSet cellSymbols = cell->collectSymbols();
+    ret.insert(cellSymbols.begin(), cellSymbols.end());
+  }
+  return ret;
 }
 
 
-void PointerValue::setPtee(uptr<RuntimeValue> ptee) {
-  assert(false && "unimplemeted");
+void PointerValue::setPtee(uptr<RuntimeValue> ptee_) {
+  ptee = std::move(ptee_);
 }
 
-bool PointerValue::dumpToStream(llvm::raw_ostream& file) {
-  assert(false && "unimplemeted");
-  return false;
+void PointerValue::dumpToStream(llvm::raw_ostream& file) const {
+  file <<"(Curioptr " <<value << " (ptee ";
+  ptee->dumpToStream(file);
+  file <<"))";
 }
 
 bool PointerValue::eq(const class RuntimeValue& other) const {
-  assert(false && "unimplemeted");
+  if (const PointerValue * otherPtr =
+      dyn_cast<const PointerValue>(&other)) {
+    if (0 != value->compare(*otherPtr->value)) return false;
+    return ptee->eq(*otherPtr->ptee);
+  }
   return false;
 }
 
 SymbolSet PointerValue::collectSymbols() const {
-  assert(false && "unimplemeted");
-  return SymbolSet();
+  assert(isa<ConstantExpr>(value));
+  return ptee->collectSymbols();
 }
 
-bool PlainValue::dumpToStream(llvm::raw_ostream& file) {
-  assert(false && "unimplemeted");
-  return false;
+void PlainValue::dumpToStream(llvm::raw_ostream& file) const {
+  file <<"((is_signed " <<layout->isSigned()
+       <<") (width " <<layout->getWidth()
+       <<") (value " <<val <<"))";
 }
 
 bool PlainValue::eq(const class RuntimeValue& other) const {
-  assert(false && "unimplemeted");
+  if (const PlainValue *otherPV =
+      dyn_cast<const PlainValue>(&other)) {
+    return 0 == val->compare(*otherPV->val);
+  }
   return false;
 }
 
 SymbolSet PlainValue::collectSymbols() const {
-  assert(false && "unimplemeted");
-  return SymbolSet();
+  return GetExprSymbols::visit(val);
 }
 
 
