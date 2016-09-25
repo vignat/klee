@@ -428,3 +428,23 @@ void ExecutionState::retFromSpecialFunction(KInstruction *target,
   stack.back().locals[target->dest].value = retVal;
 }
 
+ref<Expr> ExecutionState::readMemoryChunk(ref<ConstantExpr> addr,
+                                          Expr::Width width) {
+  ObjectPair op;
+  bool success = addressSpace.resolveOne(addr, op);
+  assert(success && "Unknown pointer result!");
+  const MemoryObject *mo = op.first;
+  const ObjectState *os = op.second;
+  //FIXME: assume inbounds.
+  ref<Expr> offset = mo->getOffsetExpr(addr);
+  assert(0 < width && "Can not read a zero-length value.");
+  return os->read(offset, width);
+}
+
+ref<Expr> ExecutionState::readMemoryChunk(size_t addr,
+                                          Expr::Width width) {
+  ref<klee::ConstantExpr> addrExpr =
+    klee::ConstantExpr::alloc(addr,
+                              sizeof(size_t)*8);
+  return readMemoryChunk(addrExpr, width);
+}
