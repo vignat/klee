@@ -175,6 +175,12 @@ namespace {
             cl::init(""));
 
   cl::opt<bool>
+  DumpCallTracePrefixes("dump-call-trace-prefixes",
+                        cl::desc("Compute and dump all the prefixes for the call "
+                                 "traces, generated according to klee_trace_*."),
+                        cl::init(false));
+
+  cl::opt<bool>
   ReplayKeepSymbolic("replay-keep-symbolic",
                      cl::desc("Replay the test cases only by asserting "
                               "the bytes, not necessarily making them concrete."));
@@ -237,6 +243,7 @@ private:
 
   unsigned m_testIndex;  // number of tests written so far
   unsigned m_pathsExplored; // number of paths explored so far
+  CallTree m_callTree;
 
   // used for writing .ktest files
   int m_argc;
@@ -256,6 +263,7 @@ public:
   void processTestCase(const ExecutionState  &state,
                        const char *errorMessage,
                        const char *errorSuffix);
+  void processCallPath(const ExecutionState &state);
 
   std::string getOutputFilename(const std::string &filename);
   llvm::raw_fd_ostream *openOutputFile(const std::string &filename);
@@ -270,6 +278,8 @@ public:
                                  std::vector<std::string> &results);
 
   static std::string getRunTimeLibraryPath(const char *argv0);
+
+  void dumpCallPathPrefixes();
 };
 
 KleeHandler::KleeHandler(int argc, char **argv)
@@ -547,6 +557,11 @@ void KleeHandler::processTestCase(const ExecutionState &state,
   }
 }
 
+void KleeHandler::processCallPath(const ExecutionState &state) {
+  if (DumpCallTracePrefixes)
+    m_callTree.addCallPath(state.callTrace);
+}
+
   // load a .path file
 void KleeHandler::loadPathFile(std::string name,
                                      std::vector<bool> &buffer) {
@@ -629,6 +644,10 @@ std::string KleeHandler::getRunTimeLibraryPath(const char *argv0) {
   KLEE_DEBUG_WITH_TYPE("klee_runtime", llvm::dbgs() <<
                        libDir.c_str() << "\n");
   return libDir.str();
+}
+
+void KleeHandler::dumpCallPathPrefixes() {
+  m_callTree.dumpCallPrefixes(this);
 }
 
 //===----------------------------------------------------------------------===//
@@ -1500,6 +1519,10 @@ int main(int argc, char **argv, char **envp) {
       }
     }
     interpreter->runFunctionAsMain(mainFn, pArgc, pArgv, pEnvp);
+
+    handler->getInfoStream() << "KLEE: saving call prefixes\n";
+    if (DumpCallTracePrefixes)
+      handler->dumpCallPathPrefixes();
 
     while (!seeds.empty()) {
       kTest_free(seeds.back());

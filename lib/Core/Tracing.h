@@ -13,6 +13,7 @@
 #include <map>
 #include <string>
 #include <vector>
+#include <list>
 
 #include "TracingDefs.h"
 #include "klee/Expr.h"
@@ -23,6 +24,7 @@ namespace klee {
 
   class RuntimeValue;
   class MetaValue;
+  class InterpreterHandler;
 
   /// MetaValue -- holds the memory layout for one element in the hierarchy.
   class MetaValue {
@@ -138,8 +140,10 @@ namespace klee {
     void traceExtraPointer(std::string name, uptr<MetaValue> layout,
                            uint64_t addr, const ExecutionState &state);
 
-
     void traceFunOutput(ref<Expr> retValue, const ExecutionState &state);
+
+    bool eq(const CallInfo& other) const;
+    bool sameInvocation(const CallInfo& other) const;
   private:
     struct StructuredArg {
       uptr<MetaValue> layout;
@@ -166,6 +170,47 @@ namespace klee {
     std::vector< ref<Expr> > returnContext;
 
     std::string funName;
+
+    bool returned;
+  };
+
+  class FileOpener {
+  public:
+    virtual llvm::raw_ostream *openAnotherFile() = 0;
+  };
+
+  class CallTreeNode {
+  public:
+    CallTreeNode(const std::vector<CallInfo>& initialPath);
+    void addCallPath(std::vector<CallInfo>::const_iterator begin,
+                     std::vector<CallInfo>::const_iterator end,
+                     int id);
+    void dumpCallPrefixes(std::list<CallInfo> accumulatedPrefix,
+                          FileOpener* fileOpener);
+  private:
+    class PathTip {
+      int pathId;
+      CallInfo tipCall;
+    };
+    PathTip tip;
+    std::vector< uptr<CallTreeNode> > children;
+  };
+
+  class CallTree {
+  public:
+    void addCallPath(const std::vector<CallInfo> &path);
+    void dumpCallPrefixes(InterpreterHandler* handler);
+
+  private:
+    int lastId;
+    uptr<CallTreeNode> root;
+
+    class PrefixFileOpener :public FileOpener {
+    public:
+      PrefixFileOpener(InterpreterHandler* handler);
+
+      virtual llvm::raw_ostream *openAnotherFile();
+    };
   };
 
 } // End klee namespace

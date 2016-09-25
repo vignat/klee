@@ -2863,6 +2863,7 @@ void Executor::terminateState(ExecutionState &state) {
                       "replay did not consume all objects in test input.");
   }
 
+  interpreterHandler->processCallPath(state);
   interpreterHandler->incPathsExplored();
 
   std::vector<ExecutionState *>::iterator it =
