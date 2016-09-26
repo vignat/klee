@@ -193,7 +193,7 @@ public:
   bool merge(const ExecutionState &b);
   void dumpStack(llvm::raw_ostream &out) const;
 
-  std::vector<ref<Expr> > relevantConstraints(SymbolSet symbols) const;
+  std::set<ref<Expr> > relevantConstraints(SymbolSet symbols) const;
   ref<Expr> readMemoryChunk(ref<ConstantExpr> addr,
                             Expr::Width width);
   ref<Expr> readMemoryChunk(size_t addr,

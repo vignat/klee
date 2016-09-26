@@ -14,6 +14,7 @@
 #include <string>
 #include <vector>
 #include <list>
+#include <set>
 #include <llvm/Support/Casting.h>
 
 #include "TracingDefs.h"
@@ -215,6 +216,7 @@ namespace klee {
 
     bool eq(const CallInfo& other) const;
     bool sameInvocation(const CallInfo& other) const;
+    void dumpToStream(llvm::raw_ostream& file) const;
   private:
     struct StructuredArg {
       const MetaValue *layout;
@@ -229,17 +231,17 @@ namespace klee {
     TracingMap<std::string, uptr<RuntimeValue> > argsBeforeCall;
     TracingMap<std::string, uptr<RuntimeValue> > argsAfterCall;
 
-    std::vector<StructuredPtr> extraPtrs;
-    std::vector<uptr<PointerValue> > extraPtrsBeforeCall;
-    std::vector<uptr<PointerValue> > extraPtrsAfterCall;
+    std::vector<StructuredPtr> extraPtees;
+    std::vector<uptr<RuntimeValue> > extraPteesBeforeCall;
+    std::vector<uptr<RuntimeValue> > extraPteesAfterCall;
 
 
     const MetaValue *retLayout;
     uptr<RuntimeValue> retValue;
 
     SymbolSet symbolsIn;
-    std::vector< ref<Expr> > callContext;
-    std::vector< ref<Expr> > returnContext;
+    std::set< ref<Expr> > callContext;
+    std::set< ref<Expr> > returnContext;
 
     std::string funName;
     bool returned;
@@ -254,6 +256,9 @@ namespace klee {
 
   class CallTreeNode {
   public:
+    CallTreeNode(int pathId, const CallInfo& tipCall)
+      :tip(pathId, tipCall) {}
+
     void addCallPath(std::vector<CallInfo>::const_iterator begin,
                      std::vector<CallInfo>::const_iterator end,
                      int id);
@@ -263,13 +268,19 @@ namespace klee {
     struct PathTip {
       int pathId;
       CallInfo tipCall;
+
+      PathTip(int pathId_, const CallInfo& tipCall_)
+        :pathId(pathId_), tipCall(tipCall_) {}
     };
     PathTip tip;
     std::vector< CallTreeNode > children;
+
+    std::vector<std::vector<CallTreeNode::PathTip*> > groupChildren();
   };
 
   class CallTree {
   public:
+    CallTree() :root(-1, CallInfo("root")) {}
     void addCallPath(const std::vector<CallInfo> &path);
     void dumpCallPrefixes(InterpreterHandler* handler);
 

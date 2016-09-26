@@ -221,6 +221,7 @@ void PointerValue::dumpToStream(llvm::raw_ostream& file) const {
 bool PointerValue::eq(const class RuntimeValue& other) const {
   if (const PointerValue * otherPtr =
       dyn_cast<const PointerValue>(&other)) {
+    if (value.get() == otherPtr->value.get()) return true;
     if (0 != value->compare(*otherPtr->value)) return false;
     return ptee->eq(*otherPtr->ptee);
   }
@@ -248,6 +249,7 @@ void PlainValue::dumpToStream(llvm::raw_ostream& file) const {
 bool PlainValue::eq(const class RuntimeValue& other) const {
   if (const PlainValue *otherPV =
       dyn_cast<const PlainValue>(&other)) {
+    if (val.get() == otherPV->val.get()) return true;
     return 0 == val->compare(*otherPV->val);
   }
   return false;
@@ -264,7 +266,7 @@ RuntimeValue *PlainValue::makeCopy() const {
 
 CallInfo::CallInfo(const CallInfo& ci)
   : argsLayout(ci.argsLayout),
-    extraPtrs(ci.extraPtrs),
+    extraPtees(ci.extraPtees),
     retLayout(ci.retLayout),
     retValue(ci.retValue->makeCopy()),
     callContext(ci.callContext),
@@ -282,11 +284,11 @@ CallInfo::CallInfo(const CallInfo& ci)
                                aac.first,
                                uptr<RuntimeValue>(aac.second->makeCopy()));
   }
-  for (const auto &epbc : ci.extraPtrsBeforeCall) {
-    extraPtrsBeforeCall.emplace_back(cast<PointerValue>(epbc->makeCopy()));
+  for (const auto &epbc : ci.extraPteesBeforeCall) {
+    extraPteesBeforeCall.emplace_back(epbc->makeCopy());
   }
-  for (const auto &epac : ci.extraPtrsAfterCall) {
-    extraPtrsAfterCall.emplace_back(cast<PointerValue>(epac->makeCopy()));
+  for (const auto &epac : ci.extraPteesAfterCall) {
+    extraPteesAfterCall.emplace_back(epac->makeCopy());
   }
 }
 
@@ -327,10 +329,10 @@ void CallInfo::traceExtraPointer(std::string name,
   sptr.addr = addr;
   sptr.name = name;
 
-  extraPtrs.push_back(sptr);
+  extraPtees.push_back(sptr);
   uptr<RuntimeValue> valBeforeCall = layout->readValueByPtr(addr, state);
   addCallConstraintsFor(valBeforeCall.get(), state);
-  extraPtrsBeforeCall.emplace_back(std::move(valBeforeCall));
+  extraPteesBeforeCall.emplace_back(std::move(valBeforeCall));
 }
 
 void CallInfo::traceFunOutput(ref<Expr> retValue_, ExecutionState *state) {
@@ -344,18 +346,137 @@ void CallInfo::traceFunOutput(ref<Expr> retValue_, ExecutionState *state) {
     argsAfterCall.insert(std::make_pair(argLayoutPair.first,
                                         std::move(valAfterCall)));
   }
-  for (const auto& extraPtr : extraPtrs) {
+  for (const auto& extraPtr : extraPtees) {
     uptr<RuntimeValue> valAfterCall =
       extraPtr.layout->readValueByPtr(extraPtr.addr, state);
     SymbolSet ptrSymbols = valAfterCall->collectSymbols();
     symbols.insert(ptrSymbols.begin(), ptrSymbols.end());
-    extraPtrsAfterCall.emplace_back(std::move(valAfterCall));
+    extraPteesAfterCall.emplace_back(std::move(valAfterCall));
   }
   retValue = retLayout->readValue(retValue_, state);
   SymbolSet retSymbols = retValue->collectSymbols();
   symbols.insert(retSymbols.begin(), retSymbols.end());
   returnContext = state->relevantConstraints(symbols);
   returned = true;
+}
+
+bool CallInfo::eq(const CallInfo& other) const {
+  if (!sameInvocation(other)) return false;
+  if (argsAfterCall.size() != other.argsAfterCall.size())
+    return false;
+  for (auto& aac : argsAfterCall) {
+    auto otherAAC = other.argsAfterCall.find(aac.first);
+    if (otherAAC == other.argsAfterCall.end()) return false;
+    if (aac.second) {
+      if (!otherAAC->second) return false;
+      if (!aac.second->eq(*otherAAC->second)) return false;
+    } else {
+      if (otherAAC->second) return false;
+    }
+  }
+  if (extraPteesAfterCall.size() != other.extraPteesAfterCall.size())
+    return false;
+  for (size_t i = 0; i < extraPteesAfterCall.size(); ++i) {
+    auto &epac = extraPteesAfterCall[i];
+    auto &otherEPAC = other.extraPteesAfterCall[i];
+    if (epac) {
+      if (!otherEPAC) return false;
+      if (!epac->eq(*otherEPAC)) return false;
+    } else {
+      if (otherEPAC) return false;
+    }
+  }
+
+  if (retValue) {
+    if (!other.retValue) return false;
+    if (!retValue->eq(*other.retValue)) return false;
+  } else {
+    if (other.retValue) return false;
+  }
+
+  // Comparing the expressions just by the ref<...> pointer values.
+  // it is an approximation, but it is not bad.
+  if (returnContext.size() != other.returnContext.size()) return false;
+  for (auto constraint : returnContext) {
+    if (other.returnContext.find(constraint) ==
+        other.returnContext.end()) return false;
+  }
+
+  if (funName != other.funName) return false;
+  return returned == other.returned;
+}
+
+bool CallInfo::sameInvocation(const CallInfo& other) const {
+  if (argsBeforeCall.size() != other.argsBeforeCall.size())
+    return false;
+  for (auto& abc : argsBeforeCall) {
+    auto otherABC = other.argsBeforeCall.find(abc.first);
+    if (otherABC == other.argsBeforeCall.end()) return false;
+    if (abc.second) {
+      if (!otherABC->second) return false;
+      if (!abc.second->eq(*otherABC->second)) return false;
+    } else {
+      if (otherABC->second) return false;
+    }
+  }
+  if (extraPteesBeforeCall.size() !=
+      other.extraPteesBeforeCall.size())
+    return false;
+  for (size_t i = 0; i < extraPteesBeforeCall.size(); ++i) {
+    auto &epbc = extraPteesBeforeCall[i];
+    auto &otherEPBC = other.extraPteesBeforeCall[i];
+    if (epbc) {
+      if (!otherEPBC) return false;
+      if (!epbc->eq(*otherEPBC)) return false;
+    } else {
+      if (otherEPBC) return false;
+    }
+  }
+  // Comparing the expressions just by the ref<...> pointer values.
+  // it is an approximation, but it is not bad.
+  if (callContext.size() != other.callContext.size()) return false;
+  for (auto constraint : callContext) {
+    if (other.callContext.find(constraint) ==
+        other.callContext.end()) return false;
+  }
+  return true;
+}
+
+void CallInfo::dumpToStream(llvm::raw_ostream& file) const {
+  assert(returned);
+  file <<"((fun_name \"" <<funName <<"\")\n (args (";
+  for (auto &argPair : argsBeforeCall) {
+    auto iterAfter = argsAfterCall.find(argPair.first);
+    file <<"\n((aname \"" <<argPair.first <<"\")\n";
+    file <<"(value_before ";
+    argPair.second->dumpToStream(file);
+    file <<") (value_after ";
+    iterAfter->second->dumpToStream(file);
+    file <<")";
+  }
+  file <<"))\n";
+  file <<"(extra_ptrs (";
+  for (size_t i = 0; i < extraPtees.size(); ++i) {
+    file <<"\n((pname \"" <<extraPtees[i].name <<"\")";
+    file <<"\n(addr " <<extraPtees[i].addr <<")";
+    file <<"\n(before_ptee ";
+    extraPteesBeforeCall[i]->dumpToStream(file);
+    file <<")";
+    file <<"\n(after_ptee ";
+    extraPteesAfterCall[i]->dumpToStream(file);
+    file <<"))";
+  }
+  file <<"))\n";
+  file <<"(call_context (";
+  for (auto &constraint : callContext) {
+    file <<constraint <<"\n";
+  }
+  file <<"))\n";
+  file <<"(ret_context (";
+  for (auto &constraint : returnContext) {
+    file <<constraint <<"\n";
+  }
+  file <<")))\n";
 }
 
 void CallTreeNode::addCallPath(std::vector<CallInfo>::const_iterator begin,
@@ -374,16 +495,66 @@ void CallTreeNode::addCallPath(std::vector<CallInfo>::const_iterator begin,
       return;
     }
   }
-  children.emplace_back();
+  children.emplace_back(id, *begin);
   CallTreeNode& n = children.back();
-  n.tip.tipCall = *begin;
-  n.tip.pathId = id;
   n.addCallPath(next, end, id);
+}
+
+std::vector<std::vector<CallTreeNode::PathTip*> >
+CallTreeNode::groupChildren() {
+  std::vector<std::vector<CallTreeNode::PathTip*> > ret;
+  for (unsigned ci = 0; ci < children.size(); ++ci) {
+    PathTip* current = &children[ci].tip;
+    bool groupNotFound = true;
+    for (unsigned gi = 0; gi < ret.size(); ++gi) {
+      if (current->tipCall.sameInvocation(ret[gi][0]->tipCall)) {
+        ret[gi].push_back(current);
+        groupNotFound = false;
+        break;
+      }
+    }
+    if (groupNotFound) {
+      ret.push_back(std::vector<CallTreeNode::PathTip*>());
+      ret.back().push_back(current);
+    }
+  }
+  return ret;
 }
 
 void CallTreeNode::dumpCallPrefixes(std::list<CallInfo> accumulatedPrefix,
                                     FileOpener* fileOpener) {
-  assert(false && "unimplemented");
+  std::vector<std::vector<CallTreeNode::PathTip*> > tipCalls = groupChildren();
+  auto ti = tipCalls.begin(), te = tipCalls.end();
+  for (; ti != te; ++ti) {
+    llvm::raw_ostream* file = fileOpener->openAnotherFile();
+    *file <<"((history (\n";
+    std::list<CallInfo>::iterator
+      ai = accumulatedPrefix.begin(),
+      ae = accumulatedPrefix.end();
+    for (; ai != ae; ++ai) {
+      ai->dumpToStream(*file);
+    }
+    *file <<"))\n";
+    //FIXME: currently there can not be more than one alternative.
+    *file <<"(tip_calls (\n";
+    for (std::vector<CallTreeNode::PathTip*>::const_iterator
+           chi = ti->begin(),
+           che = ti->end();
+         chi != che; ++chi) {
+      *file <<"\n; id: " <<(**chi).pathId <<"\n";
+      (**chi).tipCall.dumpToStream(*file);
+    }
+    *file <<")))\n";
+    delete file;
+  }
+  std::vector< CallTreeNode >::iterator
+    ci = children.begin(),
+    ce = children.end();
+  for (; ci != ce; ++ci) {
+    accumulatedPrefix.push_back(ci->tip.tipCall);
+    ci->dumpCallPrefixes(accumulatedPrefix, fileOpener);
+    accumulatedPrefix.pop_back();
+  }
 }
 
 void CallTree::addCallPath(const std::vector<CallInfo> &path) {
@@ -393,10 +564,8 @@ void CallTree::addCallPath(const std::vector<CallInfo> &path) {
 }
 
 void CallTree::dumpCallPrefixes(InterpreterHandler* handler) {
-  if (root) {
-    PrefixFileOpener fo(handler);
-    root->dumpCallPrefixes(std::list<CallInfo>(), &fo);
-  }
+  PrefixFileOpener fo(handler);
+  root.dumpCallPrefixes(std::list<CallInfo>(), &fo);
 }
 
 CallTree::PrefixFileOpener::PrefixFileOpener(InterpreterHandler* h) {

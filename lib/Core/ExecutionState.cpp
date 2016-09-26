@@ -439,9 +439,9 @@ bool symbolSetsIntersect(const SymbolSet& a, const SymbolSet& b) {
   return false;
 }
 
-std::vector<ref<Expr> > ExecutionState::
+std::set<ref<Expr> > ExecutionState::
 relevantConstraints(SymbolSet symbols) const {
-  std::vector<ref<Expr> > ret;
+  std::set<ref<Expr> > ret;
   llvm::SmallPtrSet<Expr*, 100> insertedConstraints;
   bool newSymbols = false;
   do {
@@ -458,7 +458,7 @@ relevantConstraints(SymbolSet symbols) const {
           newSymbols = newSymbols || inserted;
         }
         symbols.insert(constrainedSymbols.begin(), constrainedSymbols.end());
-        ret.push_back(*ci);
+        ret.insert(*ci);
         insertedConstraints.insert((*ci).get());
       }
     }
