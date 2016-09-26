@@ -47,14 +47,18 @@ namespace klee {
       std::string name;
       size_t offset;
       uptr<MetaValue> layout;
+
+      MetaStructureField(const std::string &name_,
+                         size_t offset_,
+                         uptr<MetaValue> layout_);
     };
-    TracingMap<size_t, uptr<MetaStructureField> > fields;
+    TracingMap<size_t, MetaStructureField> fields;
 
   public:
     virtual uptr<RuntimeValue> readValue(ref<Expr> val,
                                          ExecutionState *state) const;
     virtual uptr<RuntimeValue> readValueByPtr(size_t addr,
-                                              ExecutionState *state) const = 0;
+                                              ExecutionState *state) const;
     virtual Expr::Width calculateWidth() const;
 
     bool getFieldName(size_t offset,
@@ -114,6 +118,7 @@ namespace klee {
     virtual void dumpToStream(llvm::raw_ostream& file) const = 0;
     virtual bool eq(const class RuntimeValue& other) const = 0;
     virtual SymbolSet collectSymbols() const = 0;
+    virtual RuntimeValue *makeCopy() const = 0;
     RuntimeValueKind getKind() const { return kind; }
   private:
     RuntimeValueKind kind;
@@ -133,6 +138,7 @@ namespace klee {
     virtual void dumpToStream(llvm::raw_ostream& file) const;
     virtual bool eq(const class RuntimeValue& other) const;
     virtual SymbolSet collectSymbols() const;
+    virtual RuntimeValue *makeCopy() const;
     static bool classof(const RuntimeValue *rv)
     { return rv->getKind() == RVK_STRUCT; }
   };
@@ -153,6 +159,7 @@ namespace klee {
     virtual void dumpToStream(llvm::raw_ostream& file) const;
     virtual bool eq(const class RuntimeValue& other) const;
     virtual SymbolSet collectSymbols() const;
+    virtual RuntimeValue *makeCopy() const;
     static bool classof(const RuntimeValue *rv)
     { return rv->getKind() == RVK_ARRAY; }
   };
@@ -171,6 +178,7 @@ namespace klee {
     virtual void dumpToStream(llvm::raw_ostream& file) const;
     virtual bool eq(const class RuntimeValue& other) const;
     virtual SymbolSet collectSymbols() const;
+    virtual RuntimeValue *makeCopy() const;
     static bool classof(const RuntimeValue *rv)
     { return rv->getKind() == RVK_POINTER; }
   };
@@ -187,32 +195,33 @@ namespace klee {
     virtual void dumpToStream(llvm::raw_ostream& file) const;
     virtual bool eq(const class RuntimeValue& other) const;
     virtual SymbolSet collectSymbols() const;
+    virtual RuntimeValue *makeCopy() const;
     static bool classof(const RuntimeValue *rv)
     { return rv->getKind() == RVK_PLAIN; }
   };
 
   class CallInfo {
   public:
-    CallInfo() = default;
+    CallInfo(std::string funName_) :funName(funName_) {}
     CallInfo(const CallInfo& ci);
 
-    void traceArgument(std::string name, uptr<MetaValue> layout,
-                       ref<Expr> val, const ExecutionState &state);
-    void setReturnLayout(uptr<MetaValue> layout);
-    void traceExtraPointer(std::string name, uptr<MetaValue> layout,
-                           size_t addr, const ExecutionState &state);
+    void traceArgument(std::string name, const MetaValue *layout,
+                       ref<Expr> val, ExecutionState *state);
+    void setReturnLayout(const MetaValue *layout);
+    void traceExtraPointer(std::string name, const MetaValue *layout,
+                           size_t addr, ExecutionState *state);
 
-    void traceFunOutput(ref<Expr> retValue, const ExecutionState &state);
+    void traceFunOutput(ref<Expr> retValue, ExecutionState *state);
 
     bool eq(const CallInfo& other) const;
     bool sameInvocation(const CallInfo& other) const;
   private:
     struct StructuredArg {
-      uptr<MetaValue> layout;
+      const MetaValue *layout;
       ref<Expr> value;
     };
     struct StructuredPtr {
-      uptr<MetaValue> layout;
+      const MetaValue *layout;
       size_t addr;
       std::string name;
     };
@@ -221,19 +230,21 @@ namespace klee {
     TracingMap<std::string, uptr<RuntimeValue> > argsAfterCall;
 
     std::vector<StructuredPtr> extraPtrs;
-    std::vector<StructuredPtr> extraPtrsBeforeCall;
-    std::vector<StructuredPtr> extraPtrsAfterCall;
+    std::vector<uptr<PointerValue> > extraPtrsBeforeCall;
+    std::vector<uptr<PointerValue> > extraPtrsAfterCall;
 
 
-    uptr<MetaValue> retLayout;
+    const MetaValue *retLayout;
     uptr<RuntimeValue> retValue;
 
+    SymbolSet symbolsIn;
     std::vector< ref<Expr> > callContext;
     std::vector< ref<Expr> > returnContext;
 
     std::string funName;
-
     bool returned;
+
+    void addCallConstraintsFor(RuntimeValue* val, ExecutionState* state);
   };
 
   class FileOpener {
@@ -243,19 +254,18 @@ namespace klee {
 
   class CallTreeNode {
   public:
-    CallTreeNode(const std::vector<CallInfo>& initialPath);
     void addCallPath(std::vector<CallInfo>::const_iterator begin,
                      std::vector<CallInfo>::const_iterator end,
                      int id);
     void dumpCallPrefixes(std::list<CallInfo> accumulatedPrefix,
                           FileOpener* fileOpener);
   private:
-    class PathTip {
+    struct PathTip {
       int pathId;
       CallInfo tipCall;
     };
     PathTip tip;
-    std::vector< uptr<CallTreeNode> > children;
+    std::vector< CallTreeNode > children;
   };
 
   class CallTree {
@@ -265,7 +275,7 @@ namespace klee {
 
   private:
     int lastId;
-    uptr<CallTreeNode> root;
+    CallTreeNode root;
 
     class PrefixFileOpener :public FileOpener {
     public:

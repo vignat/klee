@@ -70,7 +70,7 @@ StackFrame::~StackFrame() {
 
 ExecutionState::ExecutionState(KFunction *kf) :
     pc(kf->instructions),
-    layoutBuilder(),
+    layoutManager(),
     callTrace(),
     prevPC(pc),
 
@@ -104,7 +104,7 @@ ExecutionState::~ExecutionState() {
 ExecutionState::ExecutionState(const ExecutionState& state):
     fnAliases(state.fnAliases),
     pc(state.pc),
-    layoutBuilder(state.layoutBuilder),
+    layoutManager(state.layoutManager),
     callTrace(state.callTrace),
     prevPC(state.prevPC),
     stack(state.stack),
@@ -390,21 +390,23 @@ void ExecutionState::dumpStack(llvm::raw_ostream &out) const {
 
 void ExecutionState::traceArgument(ref<Expr> value,
                                    const std::string& name,
-                                   uptr<MetaValue> layout) {
+                                   const MetaValue *layout) {
   assert(!stack.empty() && "Can not trace the main function.");
   StackFrame* lastSF = &stack.back();
   if (lastSF->outputTracePoint == nullptr) {
-    callTrace.emplace_back();
+    std::string funName = stack.back().kf->function->getName();
+    callTrace.emplace_back(funName);
     lastSF->outputTracePoint = &callTrace.back();
   }
-  lastSF->outputTracePoint->traceArgument(name, std::move(layout), value, *this);
+  lastSF->outputTracePoint->traceArgument(name, layout, value, this);
 }
 
-void ExecutionState::traceRetVal(uptr<MetaValue> layout) {
+void ExecutionState::traceRetVal(const MetaValue *layout) {
   assert(!stack.empty() && "Can not trace the main function.");
   StackFrame* lastSF = &stack.back();
   if (lastSF->outputTracePoint == nullptr) {
-    callTrace.emplace_back();
+    std::string funName = stack.back().kf->function->getName();
+    callTrace.emplace_back(funName);
     lastSF->outputTracePoint = &callTrace.back();
   }
   lastSF->outputTracePoint->setReturnLayout(std::move(layout));
@@ -412,20 +414,56 @@ void ExecutionState::traceRetVal(uptr<MetaValue> layout) {
 
 void ExecutionState::traceExtraPtr(uint64_t addr,
                                    const std::string& name,
-                                   uptr<MetaValue> layout) {
+                                   const MetaValue *layout) {
   assert(!stack.empty() && "Can not trace the main function.");
   StackFrame* lastSF = &stack.back();
   if (lastSF->outputTracePoint == nullptr) {
-    callTrace.emplace_back();
+    std::string funName = stack.back().kf->function->getName();
+    callTrace.emplace_back(funName);
     lastSF->outputTracePoint = &callTrace.back();
   }
   lastSF->outputTracePoint->traceExtraPointer(name, std::move(layout),
-                                              addr, *this);
+                                              addr, this);
 }
 
 void ExecutionState::retFromSpecialFunction(KInstruction *target,
                                             ref<Expr> retVal) {
   stack.back().locals[target->dest].value = retVal;
+}
+
+bool symbolSetsIntersect(const SymbolSet& a, const SymbolSet& b) {
+  if (a.size() > b.size()) return symbolSetsIntersect(b, a);
+  for (SymbolSet::const_iterator i = a.begin(), e = a.end(); i != e; ++i) {
+    if (b.count(*i)) return true;
+  }
+  return false;
+}
+
+std::vector<ref<Expr> > ExecutionState::
+relevantConstraints(SymbolSet symbols) const {
+  std::vector<ref<Expr> > ret;
+  llvm::SmallPtrSet<Expr*, 100> insertedConstraints;
+  bool newSymbols = false;
+  do {
+    newSymbols = false;
+    for (ConstraintManager::constraint_iterator ci = constraints.begin(),
+           cEnd = constraints.end(); ci != cEnd; ++ci) {
+      if (insertedConstraints.count((*ci).get())) continue;
+      SymbolSet constrainedSymbols = GetExprSymbols::visit(*ci);
+      if (symbolSetsIntersect(constrainedSymbols, symbols)) {
+        for (SymbolSet::const_iterator csi = constrainedSymbols.begin(),
+               cse = constrainedSymbols.end();
+             csi != cse; ++csi) {
+          bool inserted = symbols.insert(*csi);
+          newSymbols = newSymbols || inserted;
+        }
+        symbols.insert(constrainedSymbols.begin(), constrainedSymbols.end());
+        ret.push_back(*ci);
+        insertedConstraints.insert((*ci).get());
+      }
+    }
+  } while (newSymbols);
+  return ret;
 }
 
 ref<Expr> ExecutionState::readMemoryChunk(ref<ConstantExpr> addr,

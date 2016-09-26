@@ -29,10 +29,10 @@ uptr<RuntimeValue> MetaStructure::readValueByPtr(size_t addr,
                                                  ExecutionState *state) const {
   uptr<StructureValue> ret(new StructureValue(this));
   for (const auto& fieldPair : fields) {
-    MetaStructureField* field = fieldPair.second.get();
+    const MetaStructureField &field = fieldPair.second;
     uptr<RuntimeValue> fieldValue =
-      field->layout->readValueByPtr(addr + field->offset, state);
-    ret->addField(field->offset, std::move(fieldValue));
+      field.layout->readValueByPtr(addr + field.offset, state);
+    ret->addField(field.offset, std::move(fieldValue));
   }
   return ret;
 }
@@ -40,20 +40,26 @@ uptr<RuntimeValue> MetaStructure::readValueByPtr(size_t addr,
 Expr::Width MetaStructure::calculateWidth() const {
   Expr::Width width = 0;
   for (const auto& fieldPair : fields) {
-    MetaStructureField* field = fieldPair.second.get();
+    const MetaStructureField &field = fieldPair.second;
     // TODO: can be optimized: take the right-most field and go from
     // there.
-    Expr::Width ending = 8*field->offset + field->layout->calculateWidth();
+    Expr::Width ending = 8*field.offset + field.layout->calculateWidth();
     if (ending > width) width = ending;
   }
   return width;
 }
 
+MetaStructure::MetaStructureField::MetaStructureField(const std::string &name_,
+                                                      size_t offset_,
+                                                      uptr<MetaValue> layout_)
+  :name(name_), offset(offset_), layout(std::move(layout_))
+{}
+
 bool MetaStructure::getFieldName(size_t offset,
                                  const std::string **outName) const {
   const auto& field = fields.find(offset);
   if (field != fields.end()) {
-    *outName = &field->second->name;
+    *outName = &field->second.name;
     return true;
   }
   return false;
@@ -106,6 +112,7 @@ Expr::Width MetaPlainVal::calculateWidth() const {
   return width;
 }
 
+
 void StructureValue::addField(size_t offset, uptr<RuntimeValue> value) {
   assert(fields.find(offset) == fields.end());
   fields.emplace(offset, std::move(value));
@@ -147,6 +154,16 @@ SymbolSet StructureValue::collectSymbols() const {
   return ret;
 }
 
+RuntimeValue *StructureValue::makeCopy() const {
+  StructureValue *ret(new StructureValue(layout));
+  for (const auto& fieldPair : fields) {
+    ret->fields.emplace_hint(ret->fields.end(),
+                             fieldPair.first,
+                             uptr<RuntimeValue>(fieldPair.second->makeCopy()));
+  }
+  return ret;
+}
+
 void ArrayValue::setCell(size_t index, uptr<RuntimeValue> value) {
   cells[index] = std::move(value);
 }
@@ -182,6 +199,14 @@ SymbolSet ArrayValue::collectSymbols() const {
   return ret;
 }
 
+RuntimeValue *ArrayValue::makeCopy() const {
+  ArrayValue *ret(new ArrayValue(layout, cells.size()));
+  for (size_t i = 0; i < cells.size(); ++i) {
+    ret->cells[i].reset(cells[i]->makeCopy());
+  }
+  return ret;
+}
+
 
 void PointerValue::setPtee(uptr<RuntimeValue> ptee_) {
   ptee = std::move(ptee_);
@@ -207,6 +232,13 @@ SymbolSet PointerValue::collectSymbols() const {
   return ptee->collectSymbols();
 }
 
+RuntimeValue *PointerValue::makeCopy() const {
+  PointerValue *ret(new PointerValue(layout));
+  ret->ptee.reset(ptee->makeCopy());
+  ret->value = value;
+  return ret;
+}
+
 void PlainValue::dumpToStream(llvm::raw_ostream& file) const {
   file <<"((is_signed " <<layout->isSigned()
        <<") (width " <<layout->getWidth()
@@ -225,39 +257,128 @@ SymbolSet PlainValue::collectSymbols() const {
   return GetExprSymbols::visit(val);
 }
 
+RuntimeValue *PlainValue::makeCopy() const {
+  return new PlainValue(layout, val);
+}
 
-CallInfo::CallInfo(const CallInfo& ci) {
-  assert(false && "unimplemented");
+
+CallInfo::CallInfo(const CallInfo& ci)
+  : argsLayout(ci.argsLayout),
+    extraPtrs(ci.extraPtrs),
+    retLayout(ci.retLayout),
+    retValue(ci.retValue->makeCopy()),
+    callContext(ci.callContext),
+    returnContext(ci.returnContext),
+    funName(ci.funName),
+    returned(ci.returned)
+{
+  for (const auto &abc : ci.argsBeforeCall) {
+    argsBeforeCall.emplace_hint(argsBeforeCall.end(),
+                                abc.first,
+                                uptr<RuntimeValue>(abc.second->makeCopy()));
+  }
+  for (const auto &aac : ci.argsAfterCall) {
+    argsAfterCall.emplace_hint(argsAfterCall.end(),
+                               aac.first,
+                               uptr<RuntimeValue>(aac.second->makeCopy()));
+  }
+  for (const auto &epbc : ci.extraPtrsBeforeCall) {
+    extraPtrsBeforeCall.emplace_back(cast<PointerValue>(epbc->makeCopy()));
+  }
+  for (const auto &epac : ci.extraPtrsAfterCall) {
+    extraPtrsAfterCall.emplace_back(cast<PointerValue>(epac->makeCopy()));
+  }
 }
 
 void CallInfo::traceArgument(std::string name,
-                             uptr<MetaValue> layout,
+                             const MetaValue *layout,
                              ref<Expr> val,
-                             const ExecutionState &state) {
-  assert(false && "unimplemented");
+                             ExecutionState *state) {
+  StructuredArg sarg;
+  sarg.layout = layout;
+  sarg.value = val;
+  argsLayout.insert(std::make_pair(name, sarg));
+  uptr<RuntimeValue> valBeforeCall = layout->readValue(val, state);
+  addCallConstraintsFor(valBeforeCall.get(), state);
+  argsBeforeCall.insert(std::make_pair(name, std::move(valBeforeCall)));
 }
-void CallInfo::setReturnLayout(uptr<MetaValue> layout) {
-  assert(false && "unimplemented");
+
+void CallInfo::addCallConstraintsFor(RuntimeValue* val,
+                                     ExecutionState* state) {
+  SymbolSet symbols = val->collectSymbols();
+  symbolsIn.insert(symbols.begin(), symbols.end());
+  //TODO: this gets called on every "trace" call for the same
+  // function. Do it only once.
+  // can not do this on the "trace output" event, because
+  // there may new constraints appear.
+  callContext = state->relevantConstraints(symbolsIn);
 }
+
+void CallInfo::setReturnLayout(const MetaValue *layout) {
+  retLayout = layout;
+}
+
 void CallInfo::traceExtraPointer(std::string name,
-                                 uptr<MetaValue> layout,
+                                 const MetaValue *layout,
                                  size_t addr,
-                                 const ExecutionState &state) {
-  assert(false && "unimplemented");
+                                 ExecutionState *state) {
+  StructuredPtr sptr;
+  sptr.layout = layout;
+  sptr.addr = addr;
+  sptr.name = name;
+
+  extraPtrs.push_back(sptr);
+  uptr<RuntimeValue> valBeforeCall = layout->readValueByPtr(addr, state);
+  addCallConstraintsFor(valBeforeCall.get(), state);
+  extraPtrsBeforeCall.emplace_back(std::move(valBeforeCall));
 }
 
-CallTreeNode::CallTreeNode(const std::vector<CallInfo>& initialPath) {
-  assert(false && "unimplemented");
-}
-
-void CallInfo::traceFunOutput(ref<Expr> retValue, const ExecutionState &state) {
-  assert(false && "unimplemented");
+void CallInfo::traceFunOutput(ref<Expr> retValue_, ExecutionState *state) {
+  SymbolSet symbols = symbolsIn;
+  for (const auto& argLayoutPair : argsLayout) {
+    const StructuredArg &sarg = argLayoutPair.second;
+    uptr<RuntimeValue> valAfterCall =
+      sarg.layout->readValue(sarg.value, state);
+    SymbolSet argSymbols = valAfterCall->collectSymbols();
+    symbols.insert(argSymbols.begin(), argSymbols.end());
+    argsAfterCall.insert(std::make_pair(argLayoutPair.first,
+                                        std::move(valAfterCall)));
+  }
+  for (const auto& extraPtr : extraPtrs) {
+    uptr<RuntimeValue> valAfterCall =
+      extraPtr.layout->readValueByPtr(extraPtr.addr, state);
+    SymbolSet ptrSymbols = valAfterCall->collectSymbols();
+    symbols.insert(ptrSymbols.begin(), ptrSymbols.end());
+    extraPtrsAfterCall.emplace_back(std::move(valAfterCall));
+  }
+  retValue = retLayout->readValue(retValue_, state);
+  SymbolSet retSymbols = retValue->collectSymbols();
+  symbols.insert(retSymbols.begin(), retSymbols.end());
+  returnContext = state->relevantConstraints(symbols);
+  returned = true;
 }
 
 void CallTreeNode::addCallPath(std::vector<CallInfo>::const_iterator begin,
                                std::vector<CallInfo>::const_iterator end,
                                int id) {
-  assert(false && "unimplemented");
+  if (begin == end) return;
+
+  std::vector<CallInfo>::const_iterator next = begin;
+  ++next;
+  std::vector<CallTreeNode>::iterator
+    i = children.begin(),
+    ie = children.end();
+  for (; i != ie; ++i) {
+    if ((*i).tip.tipCall.eq(*begin)) {
+      (*i).addCallPath(next, end, id);
+      return;
+    }
+  }
+  children.emplace_back();
+  CallTreeNode& n = children.back();
+  n.tip.tipCall = *begin;
+  n.tip.pathId = id;
+  n.addCallPath(next, end, id);
 }
 
 void CallTreeNode::dumpCallPrefixes(std::list<CallInfo> accumulatedPrefix,
@@ -268,11 +389,7 @@ void CallTreeNode::dumpCallPrefixes(std::list<CallInfo> accumulatedPrefix,
 void CallTree::addCallPath(const std::vector<CallInfo> &path) {
   if (path.size() == 0) return;
   ++lastId;
-  if (root) {
-    root->addCallPath(path.begin(), path.end(), lastId);
-  } else {
-    root.reset(new CallTreeNode(path));
-  }
+  root.addCallPath(path.begin(), path.end(), lastId);
 }
 
 void CallTree::dumpCallPrefixes(InterpreterHandler* handler) {

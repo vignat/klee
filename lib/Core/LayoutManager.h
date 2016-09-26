@@ -1,4 +1,4 @@
-//===-- LayoutBuilder.h ----------------------------------------*- C++ -*-===//
+//===-- LayoutManager.h ----------------------------------------*- C++ -*-===//
 //
 //                     The KLEE Symbolic Virtual Machine
 //
@@ -7,8 +7,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef KLEE_LAYOUT_BUILDER_H
-#define KLEE_LAYOUT_BUILDER_H
+#ifndef KLEE_LAYOUT_MANAGER_H
+#define KLEE_LAYOUT_MANAGER_H
 
 
 #include "TracingDefs.h"
@@ -17,10 +17,10 @@ namespace klee {
 
   class MetaValue;
 
-  class LayoutBuilder {
+  class LayoutManager {
   public:
-    LayoutBuilder() = default;
-    LayoutBuilder(const LayoutBuilder& lb);
+    LayoutManager() = default;
+    LayoutManager(const LayoutManager& lb);
 
     int plain(uint64_t);
     int ptr(int ptee);
@@ -29,7 +29,7 @@ namespace klee {
                   int offset, const std::string& name);
     int array(int cellLayout, int length);
 
-    uptr<MetaValue> buildAndRemove(int layout);
+    MetaValue *getLayout(int layout);
 
   private:
     TracingMap<int, uptr<MetaValue> > layoutParts;
@@ -37,4 +37,4 @@ namespace klee {
   };
 } // End klee namespace
 
-#endif //KLEE_LAYOUT_BUILDER_H
+#endif //KLEE_LAYOUT_MANAGER_H

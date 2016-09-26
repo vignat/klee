@@ -353,7 +353,7 @@ void SpecialFunctionHandler::handleLPlain(ExecutionState &state,
                                    Executor::User);
   }
 
-  int idx = state.layoutBuilder.plain(plain_type);
+  int idx = state.layoutManager.plain(plain_type);
   state.retFromSpecialFunction(target, ConstantExpr::alloc(idx, Expr::Int32));
 }
 
@@ -373,7 +373,7 @@ void SpecialFunctionHandler::handleLPtr(ExecutionState &state,
   }
 
   uint64_t pteeLayout = cast<ConstantExpr>(arguments[0])->getZExtValue();
-  int idx = state.layoutBuilder.ptr(pteeLayout);
+  int idx = state.layoutManager.ptr(pteeLayout);
   state.retFromSpecialFunction(target, ConstantExpr::alloc(idx, Expr::Int32));
 }
 
@@ -408,7 +408,7 @@ void SpecialFunctionHandler::handleLFirstField(ExecutionState &state,
   uint64_t valLayout = cast<ConstantExpr>(arguments[0])->getZExtValue();
   uint64_t offset = cast<ConstantExpr>(arguments[1])->getZExtValue();
   std::string name = readStringAtAddress(state, arguments[2]);
-  int idx = state.layoutBuilder.firstField(valLayout, offset, name);
+  int idx = state.layoutManager.firstField(valLayout, offset, name);
   state.retFromSpecialFunction(target, ConstantExpr::alloc(idx, Expr::Int32));
 }
 
@@ -450,7 +450,7 @@ void SpecialFunctionHandler::handleLNextField(ExecutionState &state,
   uint64_t valLayout = cast<ConstantExpr>(arguments[1])->getZExtValue();
   uint64_t offset = cast<ConstantExpr>(arguments[2])->getZExtValue();
   std::string name = readStringAtAddress(state, arguments[3]);
-  int idx = state.layoutBuilder.nextField(lastFieldLayout,
+  int idx = state.layoutManager.nextField(lastFieldLayout,
                                           valLayout,
                                           offset,
                                           name);
@@ -480,7 +480,7 @@ void SpecialFunctionHandler::handleLArray(ExecutionState &state,
 
   uint64_t cellLayout = cast<ConstantExpr>(arguments[0])->getZExtValue();
   uint64_t length = cast<ConstantExpr>(arguments[1])->getZExtValue();
-  int idx = state.layoutBuilder.array(cellLayout, length);
+  int idx = state.layoutManager.array(cellLayout, length);
   state.retFromSpecialFunction(target, ConstantExpr::alloc(idx, Expr::Int32));
 }
 
@@ -508,8 +508,8 @@ void SpecialFunctionHandler::handleTraceArg(ExecutionState &state,
   ref<Expr> argVal = arguments[0];
   std::string name = readStringAtAddress(state, arguments[1]);
   uint64_t argLayoutHandler = cast<ConstantExpr>(arguments[2])->getZExtValue();
-  uptr<MetaValue> layout = state.layoutBuilder.buildAndRemove(argLayoutHandler);
-  state.traceArgument(argVal, name, std::move(layout));
+  const MetaValue *layout = state.layoutManager.getLayout(argLayoutHandler);
+  state.traceArgument(argVal, name, layout);
 }
 
 void SpecialFunctionHandler::handleTraceRet(ExecutionState &state,
@@ -528,8 +528,8 @@ void SpecialFunctionHandler::handleTraceRet(ExecutionState &state,
   }
 
   uint64_t retLayoutHandler = cast<ConstantExpr>(arguments[0])->getZExtValue();
-  uptr<MetaValue> layout = state.layoutBuilder.buildAndRemove(retLayoutHandler);
-  state.traceRetVal(std::move(layout));
+  const MetaValue *layout = state.layoutManager.getLayout(retLayoutHandler);
+  state.traceRetVal(layout);
 }
 
 void SpecialFunctionHandler::handleTraceExtraPtr(ExecutionState &state,
@@ -566,9 +566,9 @@ void SpecialFunctionHandler::handleTraceExtraPtr(ExecutionState &state,
   std::string name = readStringAtAddress(state, arguments[1]);
   uint64_t extraPtrLayoutHandler =
     cast<ConstantExpr>(arguments[2])->getZExtValue();
-  uptr<MetaValue> layout = state.layoutBuilder.
-    buildAndRemove(extraPtrLayoutHandler);
-  state.traceExtraPtr(extraPtr, name, std::move(layout));
+  const MetaValue *layout = state.layoutManager.
+    getLayout(extraPtrLayoutHandler);
+  state.traceExtraPtr(extraPtr, name, layout);
 }
 
 void SpecialFunctionHandler::handleAssert(ExecutionState &state,

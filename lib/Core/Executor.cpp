@@ -1542,7 +1542,7 @@ void Executor::executeInstruction(ExecutionState &state, KInstruction *ki) {
     } else {
       StackFrame* lastSF = &(*state.stack.rbegin());
       if (lastSF->outputTracePoint != nullptr)
-        lastSF->outputTracePoint->traceFunOutput(result, state);
+        lastSF->outputTracePoint->traceFunOutput(result, &state);
 
       state.popFrame();
 

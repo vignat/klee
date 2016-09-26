@@ -13,11 +13,12 @@
 #include "klee/Constraints.h"
 #include "klee/Expr.h"
 #include "klee/Internal/ADT/TreeStream.h"
+#include "klee/util/GetExprSymbols.h"
 
 // FIXME: We do not want to be exposing these? :(
 #include "../../lib/Core/AddressSpace.h"
 #include "../../lib/Core/Tracing.h"
-#include "../../lib/Core/LayoutBuilder.h"
+#include "../../lib/Core/LayoutManager.h"
 #include "klee/Internal/Module/KInstIterator.h"
 
 #include <map>
@@ -85,7 +86,7 @@ public:
   KInstIterator pc;
 
   /// @brief A builder for gradual definition of traced memory layout.
-  LayoutBuilder layoutBuilder;
+  LayoutManager layoutManager;
 
   /// @brief A trace of the chosen API functions
   /// (annotated by klee_trace_arg, klee_trace_ret).
@@ -159,11 +160,11 @@ public:
 
   void traceArgument(ref<Expr>,
                      const std::string& name,
-                     uptr<MetaValue> layout);
-  void traceRetVal(uptr<MetaValue> layout);
+                     const MetaValue *layout);
+  void traceRetVal(const MetaValue *layout);
   void traceExtraPtr(uint64_t addr,
                      const std::string& name,
-                     uptr<MetaValue> layout);
+                     const MetaValue *layout);
   void retFromSpecialFunction(KInstruction *target,
                               ref<Expr> retVal);
 
@@ -192,6 +193,7 @@ public:
   bool merge(const ExecutionState &b);
   void dumpStack(llvm::raw_ostream &out) const;
 
+  std::vector<ref<Expr> > relevantConstraints(SymbolSet symbols) const;
   ref<Expr> readMemoryChunk(ref<ConstantExpr> addr,
                             Expr::Width width);
   ref<Expr> readMemoryChunk(size_t addr,
