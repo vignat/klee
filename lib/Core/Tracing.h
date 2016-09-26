@@ -282,7 +282,7 @@ namespace klee {
   public:
     CallTree() :root(-1, CallInfo("root")) {}
     void addCallPath(const std::vector<CallInfo> &path);
-    void dumpCallPrefixes(InterpreterHandler* handler);
+    void dumpCallPrefixes(InterpreterHandler *handler);
 
   private:
     int lastId;
@@ -290,9 +290,12 @@ namespace klee {
 
     class PrefixFileOpener :public FileOpener {
     public:
-      PrefixFileOpener(InterpreterHandler* handler);
+      PrefixFileOpener(InterpreterHandler *handler);
 
       virtual llvm::raw_ostream *openAnotherFile();
+    private:
+      size_t numOpenedFiles;
+      InterpreterHandler *handler;
     };
   };
 

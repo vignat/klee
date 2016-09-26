@@ -7,10 +7,14 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include <sstream>
+#include <iomanip>
+
 #include "Tracing.h"
 
 #include "klee/Expr.h"
 #include "Context.h"
+#include "klee/Interpreter.h"
 
 using namespace klee;
 
@@ -563,15 +567,18 @@ void CallTree::addCallPath(const std::vector<CallInfo> &path) {
   root.addCallPath(path.begin(), path.end(), lastId);
 }
 
-void CallTree::dumpCallPrefixes(InterpreterHandler* handler) {
+void CallTree::dumpCallPrefixes(InterpreterHandler *handler) {
   PrefixFileOpener fo(handler);
   root.dumpCallPrefixes(std::list<CallInfo>(), &fo);
 }
 
-CallTree::PrefixFileOpener::PrefixFileOpener(InterpreterHandler* h) {
-  assert(false && "unimplemented");
+CallTree::PrefixFileOpener::PrefixFileOpener(InterpreterHandler *h)
+  :numOpenedFiles(0), handler(h) {
 }
 
 llvm::raw_ostream *CallTree::PrefixFileOpener::openAnotherFile() {
-  assert(false && "unimplemented");
+  size_t id = ++numOpenedFiles;
+  std::stringstream filename;
+  filename << "call-prefix" << std::setfill('0') << std::setw(6) << id << '.' << "txt";
+  return handler->openOutputFile(filename.str());
 }
