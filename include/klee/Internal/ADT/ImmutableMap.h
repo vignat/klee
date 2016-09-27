@@ -67,6 +67,9 @@ namespace klee {
     ImmutableMap insert(const value_type &value) const { 
       return elts.insert(value); 
     }
+    ImmutableMap insert(const value_type &&value) const { 
+      return elts.insert(value); 
+    }
     ImmutableMap replace(const value_type &value) const { 
       return elts.replace(value); 
     }

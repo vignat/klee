@@ -31,7 +31,13 @@ namespace klee {
   /// MetaValue -- holds the memory layout for one element in the hierarchy.
   class MetaValue {
   public:
-    MetaValue() = default;
+    enum MetaValueKind {
+      MVK_STRUCT,
+      MVK_ARRAY,
+      MVK_POINTER,
+      MVK_PLAIN
+    };
+    MetaValue(MetaValueKind kind_) :kind(kind_) {}
     MetaValue(const MetaValue&) = default;
     virtual ~MetaValue() = default;
 
@@ -40,6 +46,10 @@ namespace klee {
     virtual uptr<RuntimeValue> readValueByPtr(size_t addr,
                                               ExecutionState *state) const;
     virtual Expr::Width calculateWidth() const = 0;
+    MetaValueKind getKind() const { return kind; }
+
+  private:
+    MetaValueKind kind;
   };
 
   /// MetaStructure -- holds the memory layout for a structure
@@ -47,20 +57,27 @@ namespace klee {
     struct MetaStructureField {
       std::string name;
       size_t offset;
-      uptr<MetaValue> layout;
+      MetaValue *layout;
 
       MetaStructureField(const std::string &name_,
                          size_t offset_,
-                         uptr<MetaValue> layout_);
+                         MetaValue *layout_);
     };
     TracingMap<size_t, MetaStructureField> fields;
 
   public:
+    MetaStructure() :MetaValue(MVK_STRUCT) {}
+    MetaStructure(const MetaStructure&);
+
+    void addField(size_t offset, const std::string &name,
+                  MetaValue *layout);
     virtual uptr<RuntimeValue> readValue(ref<Expr> val,
                                          ExecutionState *state) const;
     virtual uptr<RuntimeValue> readValueByPtr(size_t addr,
                                               ExecutionState *state) const;
     virtual Expr::Width calculateWidth() const;
+    static bool classof(const MetaValue *mv)
+    { return mv->getKind() == MVK_STRUCT; }
 
     bool getFieldName(size_t offset,
                       const std::string **outName) const;
@@ -68,39 +85,58 @@ namespace klee {
 
   /// MetaArray -- holds the memory layout for an array
   class MetaArray :public MetaValue {
-    uptr<MetaValue> cell;
+    MetaValue *cell;
     size_t len;
 
   public:
+    MetaArray(MetaValue *cell_, size_t len_)
+      :MetaValue(MVK_ARRAY), cell(cell_), len(len_) {}
     virtual uptr<RuntimeValue> readValue(ref<Expr> val,
                                          ExecutionState *state) const;
     virtual Expr::Width calculateWidth() const;
+    static bool classof(const MetaValue *mv)
+    { return mv->getKind() == MVK_ARRAY; }
 
     size_t getLen() const { return len; }
   };
 
   /// MetaPointer -- holds the memory layout for a pointer
   class MetaPointer :public MetaValue {
-    uptr<MetaValue> ptee;
+    MetaValue *ptee;
 
   public:
+    MetaPointer(MetaValue *ptee_) :MetaValue(MVK_POINTER), ptee(ptee_) {}
+
     virtual uptr<RuntimeValue> readValue(ref<Expr> val,
                                          ExecutionState *state) const;
     virtual Expr::Width calculateWidth() const;
+    static bool classof(const MetaValue *mv)
+    { return mv->getKind() == MVK_POINTER; }
   };
 
   /// MetaPlainVal -- holds the memory layout for a plain value.
   class MetaPlainVal :public MetaValue {
-    Expr::Width width;
-    bool is_signed;
-
   public:
+    enum Kind {
+      MPV_SINTEGER,
+      MPV_UINTEGER,
+      MPV_APATHPTR,
+      MPV_FUNPTR
+    };
+    MetaPlainVal(Expr::Width width_, Kind kind_)
+      :MetaValue(MVK_PLAIN), width(width_), kind(kind_) {}
     virtual uptr<RuntimeValue> readValue(ref<Expr> val,
                                          ExecutionState *state) const;
     virtual Expr::Width calculateWidth() const;
 
     Expr::Width getWidth() const { return width; }
-    bool isSigned() const { return is_signed; }
+    Kind getValueKind() const { return kind; }
+    static bool classof(const MetaValue *mv)
+    { return mv->getKind() == MVK_PLAIN; }
+
+  private:
+    Expr::Width width;
+    Kind kind;
   };
 
 

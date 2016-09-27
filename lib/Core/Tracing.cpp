@@ -16,11 +16,29 @@
 #include "Context.h"
 #include "klee/Interpreter.h"
 
+#if LLVM_VERSION_CODE >= LLVM_VERSION(3, 3)
+#include <llvm/IR/Function.h>
+#else//LLVM_VERSION_CODE...
+#include <llvm/Function.h>
+#endif//LLVM_VERSION_CODE...
+
 using namespace klee;
 
 uptr<RuntimeValue> MetaValue::readValueByPtr(size_t addr,
                                              ExecutionState *state) const {
   return readValue(state->readMemoryChunk(addr, calculateWidth()), state);
+}
+
+MetaStructure::MetaStructure(const MetaStructure& other)
+  :MetaValue(MVK_STRUCT), fields(other.fields) {
+}
+
+void MetaStructure::addField(size_t offset,
+                             const std::string &name,
+                             MetaValue *layout) {
+  MetaStructureField field(name, offset, layout);
+  //TODO: assert there is no existing field by this offset.
+  fields.insert(std::make_pair(offset,field));
 }
 
 uptr<RuntimeValue> MetaStructure::readValue(ref<Expr> val,
@@ -55,8 +73,8 @@ Expr::Width MetaStructure::calculateWidth() const {
 
 MetaStructure::MetaStructureField::MetaStructureField(const std::string &name_,
                                                       size_t offset_,
-                                                      uptr<MetaValue> layout_)
-  :name(name_), offset(offset_), layout(std::move(layout_))
+                                                      MetaValue *layout_)
+  :name(name_), offset(offset_), layout(layout_)
 {}
 
 bool MetaStructure::getFieldName(size_t offset,
@@ -245,9 +263,34 @@ RuntimeValue *PointerValue::makeCopy() const {
 }
 
 void PlainValue::dumpToStream(llvm::raw_ostream& file) const {
-  file <<"((is_signed " <<layout->isSigned()
-       <<") (width " <<layout->getWidth()
-       <<") (value " <<val <<"))";
+  const char *kindName = 0;
+  switch (layout->getValueKind()) {
+  case MetaPlainVal::Kind::MPV_SINTEGER:
+    kindName = "sint";
+    break;
+  case MetaPlainVal::Kind::MPV_UINTEGER:
+    kindName = "uint";
+    break;
+  case MetaPlainVal::Kind::MPV_APATHPTR:
+    kindName = "apathptr";
+    break;
+  case MetaPlainVal::Kind::MPV_FUNPTR:
+    kindName = "funptr";
+    break;
+  default:
+    assert(false && "Unknown plain value kind.");
+  }
+
+  file <<"((kind " <<kindName
+       <<") (width " <<layout->getWidth() <<") ";
+  //TODO: differentiate here: value melts together two different types!
+  if (layout->getValueKind() == MetaPlainVal::MPV_FUNPTR) {
+    ref<klee::ConstantExpr> address = cast<klee::ConstantExpr>(val);
+    file <<"(value \"" <<((llvm::Function*)address->getZExtValue())->getName() <<"\")";
+  } else {
+    file <<"(value " <<val <<")";
+  }
+  file <<")";
 }
 
 bool PlainValue::eq(const class RuntimeValue& other) const {

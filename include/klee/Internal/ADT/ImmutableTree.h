@@ -46,6 +46,7 @@ namespace klee {
     size_t size() const;
 
     ImmutableTree insert(const value_type &value) const;
+    ImmutableTree insert(const value_type &&value) const;
     ImmutableTree replace(const value_type &value) const;
     ImmutableTree remove(const key_type &key) const;
     ImmutableTree popMin(value_type &valueOut) const;
@@ -94,6 +95,7 @@ namespace klee {
     Node *popMin(value_type &valueOut);
     Node *popMax(value_type &valueOut);
     Node *insert(const value_type &v);
+    Node *insert(const value_type &&v);
     Node *replace(const value_type &v);
     Node *remove(const key_type &k);
   };
@@ -364,7 +366,7 @@ namespace klee {
 
   template<class K, class V, class KOV, class CMP>
   typename ImmutableTree<K,V,KOV,CMP>::Node *
-  ImmutableTree<K,V,KOV,CMP>::Node::insert(const value_type &v) {
+  ImmutableTree<K,V,KOV,CMP>::Node::insert(const value_type &&v) {
     if (isTerminator()) {
       return new Node(terminator.incref(), terminator.incref(), v);
     } else {
@@ -376,6 +378,11 @@ namespace klee {
         return incref();
       }
     }
+  }
+  template<class K, class V, class KOV, class CMP>
+  typename ImmutableTree<K,V,KOV,CMP>::Node *
+  ImmutableTree<K,V,KOV,CMP>::Node::insert(const value_type &v) {
+    return insert(v);
   }
 
   template<class K, class V, class KOV, class CMP>
@@ -531,6 +538,12 @@ namespace klee {
   template<class K, class V, class KOV, class CMP>
   ImmutableTree<K,V,KOV,CMP> 
   ImmutableTree<K,V,KOV,CMP>::insert(const value_type &value) const { 
+    return ImmutableTree(node->insert(value)); 
+  }
+
+  template<class K, class V, class KOV, class CMP>
+  ImmutableTree<K,V,KOV,CMP> 
+  ImmutableTree<K,V,KOV,CMP>::insert(const value_type &&value) const { 
     return ImmutableTree(node->insert(value)); 
   }
 

@@ -12,6 +12,7 @@
 
 
 #include "TracingDefs.h"
+#include "klee/Internal/ADT/ImmutableMap.h"
 
 namespace klee {
 
@@ -32,8 +33,11 @@ namespace klee {
     MetaValue *getLayout(int layout);
 
   private:
-    TracingMap<int, uptr<MetaValue> > layoutParts;
-    int last_idx;
+    ImmutableMap<int, uptr<MetaValue> > layoutParts;
+    static int lastIdx;
+
+    int freshId();
+    int insertANewLayout(MetaValue *l);
   };
 } // End klee namespace
 
