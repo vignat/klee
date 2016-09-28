@@ -316,7 +316,7 @@ namespace klee {
 
   class CallTree {
   public:
-    CallTree() :root(-1, CallInfo("root")) {}
+    CallTree() :lastId(0), root(-1, CallInfo("root")) {}
     void addCallPath(const std::vector<CallInfo> &path);
     void dumpCallPrefixes(InterpreterHandler *handler);
 

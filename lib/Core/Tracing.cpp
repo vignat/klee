@@ -400,7 +400,8 @@ void CallInfo::traceFunOutput(ref<Expr> retValue_, ExecutionState *state) {
     symbols.insert(ptrSymbols.begin(), ptrSymbols.end());
     extraPteesAfterCall.emplace_back(std::move(valAfterCall));
   }
-  retValue = retLayout->readValue(retValue_, state);
+  if (retLayout != nullptr)
+    retValue = retLayout->readValue(retValue_, state);
   SymbolSet retSymbols = retValue->collectSymbols();
   symbols.insert(retSymbols.begin(), retSymbols.end());
   returnContext = state->relevantConstraints(symbols);
@@ -514,6 +515,12 @@ void CallInfo::dumpToStream(llvm::raw_ostream& file) const {
     file <<"))";
   }
   file <<"))\n";
+  if (retLayout == nullptr) file <<"(ret ())";
+  else {
+    file <<"(ret (";
+    retValue->dumpToStream(file);
+    file <<"))";
+  }
   file <<"(call_context (";
   for (auto &constraint : callContext) {
     file <<constraint <<"\n";
