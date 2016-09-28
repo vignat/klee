@@ -46,7 +46,7 @@ namespace klee {
     size_t size() const;
 
     ImmutableTree insert(const value_type &value) const;
-    ImmutableTree insert(const value_type &&value) const;
+    ImmutableTree insert(value_type &&value) const;
     ImmutableTree replace(const value_type &value) const;
     ImmutableTree remove(const key_type &key) const;
     ImmutableTree popMin(value_type &valueOut) const;
@@ -79,11 +79,12 @@ namespace klee {
 
   protected:
     Node(); // solely for creating the terminator node
-    static Node *balance(Node *left, const value_type &value, Node *right);
+    static Node *balance(Node *left, value_type &&value, Node *right);
 
   public:
 
     Node(Node *_left, Node *_right, const value_type &_value);
+    Node(Node *_left, Node *_right, value_type &&_value);
     ~Node();
 
     void decref();
@@ -95,7 +96,7 @@ namespace klee {
     Node *popMin(value_type &valueOut);
     Node *popMax(value_type &valueOut);
     Node *insert(const value_type &v);
-    Node *insert(const value_type &&v);
+    Node *insert(value_type &&v);
     Node *replace(const value_type &v);
     Node *remove(const key_type &k);
   };
@@ -266,6 +267,17 @@ namespace klee {
   }
 
   template<class K, class V, class KOV, class CMP>
+  ImmutableTree<K,V,KOV,CMP>::Node::Node(Node *_left, Node *_right, value_type &&_value)
+    : left(_left), 
+      right(_right), 
+      value(std::move(_value)), 
+      height(std::max(left->height, right->height) + 1),
+      references(1) 
+  {
+    ++allocated;
+  }
+
+  template<class K, class V, class KOV, class CMP>
   ImmutableTree<K,V,KOV,CMP>::Node::~Node() {
     left->decref();
     right->decref();
@@ -293,21 +305,21 @@ namespace klee {
 
   template<class K, class V, class KOV, class CMP>
   typename ImmutableTree<K,V,KOV,CMP>::Node *
-  ImmutableTree<K,V,KOV,CMP>::Node::balance(Node *left, const value_type &value, Node *right) {
+  ImmutableTree<K,V,KOV,CMP>::Node::balance(Node *left, value_type &&value, Node *right) {
     if (left->height > right->height + 2) {
       Node *ll = left->left;
       Node *lr = left->right;
       if (ll->height >= lr->height) {
-        Node *nlr = new Node(lr->incref(), right, value);
-        Node *res = new Node(ll->incref(), nlr, left->value);
+        Node *nlr = new Node(lr->incref(), right, std::move(value));
+        Node *res = new Node(ll->incref(), nlr, std::move(left->value));
         left->decref();
         return res;
       } else {
         Node *lrl = lr->left;
         Node *lrr = lr->right;
-        Node *nll = new Node(ll->incref(), lrl->incref(), left->value);
-        Node *nlr = new Node(lrr->incref(), right, value);
-        Node *res = new Node(nll, nlr, lr->value);
+        Node *nll = new Node(ll->incref(), lrl->incref(), std::move(left->value));
+        Node *nlr = new Node(lrr->incref(), right, std::move(value));
+        Node *res = new Node(nll, nlr, std::move(lr->value));
         left->decref();
         return res;
       }
@@ -315,21 +327,21 @@ namespace klee {
       Node *rl = right->left;
       Node *rr = right->right;
       if (rr->height >= rl->height) {
-        Node *nrl = new Node(left, rl->incref(), value);
-        Node *res = new Node(nrl, rr->incref(), right->value);
+        Node *nrl = new Node(left, rl->incref(), std::move(value));
+        Node *res = new Node(nrl, rr->incref(), std::move(right->value));
         right->decref();
         return res;
       } else {
         Node *rll = rl->left;
         Node *rlr = rl->right;
-        Node *nrl = new Node(left, rll->incref(), value);
-        Node *nrr = new Node(rlr->incref(), rr->incref(), right->value);
-        Node *res = new Node(nrl, nrr, rl->value);
+        Node *nrl = new Node(left, rll->incref(), std::move(value));
+        Node *nrr = new Node(rlr->incref(), rr->incref(), std::move(right->value));
+        Node *res = new Node(nrl, nrr, std::move(rl->value));
         right->decref();
         return res;
       }
     } else {
-      return new Node(left, right, value);
+      return new Node(left, right, std::move(value));
     }
   }
 
@@ -349,7 +361,7 @@ namespace klee {
       valueOut = value;
       return right->incref();
     } else {
-      return balance(left->popMin(valueOut), value, right->incref());
+      return balance(left->popMin(valueOut), std::move(value), right->incref());
     }
   }
 
@@ -360,20 +372,20 @@ namespace klee {
       valueOut = value;
       return left->incref();
     } else {
-      return balance(left->incref(), value, right->popMax(valueOut));
+      return balance(left->incref(), std::move(value), right->popMax(valueOut));
     }
   }
 
   template<class K, class V, class KOV, class CMP>
   typename ImmutableTree<K,V,KOV,CMP>::Node *
-  ImmutableTree<K,V,KOV,CMP>::Node::insert(const value_type &&v) {
+  ImmutableTree<K,V,KOV,CMP>::Node::insert(value_type &&v) {
     if (isTerminator()) {
-      return new Node(terminator.incref(), terminator.incref(), v);
+      return new Node(terminator.incref(), terminator.incref(), std::move(v));
     } else {
       if (key_compare()(key_of_value()(v), key_of_value()(value))) {
-        return balance(left->insert(v), value, right->incref());
+        return balance(left->insert(std::move(v)), std::move(value), right->incref());
       } else if (key_compare()(key_of_value()(value), key_of_value()(v))) {
-        return balance(left->incref(), value, right->insert(v));
+        return balance(left->incref(), std::move(value), right->insert(std::move(v)));
       } else {
         return incref();
       }
@@ -382,7 +394,8 @@ namespace klee {
   template<class K, class V, class KOV, class CMP>
   typename ImmutableTree<K,V,KOV,CMP>::Node *
   ImmutableTree<K,V,KOV,CMP>::Node::insert(const value_type &v) {
-    return insert(v);
+    value_type vv(v);
+    return insert(std::move(vv));
   }
 
   template<class K, class V, class KOV, class CMP>
@@ -392,9 +405,9 @@ namespace klee {
       return new Node(terminator.incref(), terminator.incref(), v);
     } else {
       if (key_compare()(key_of_value()(v), key_of_value()(value))) {
-        return balance(left->replace(v), value, right->incref());
+        return balance(left->replace(v), std::move(value), right->incref());
       } else if (key_compare()(key_of_value()(value), key_of_value()(v))) {
-        return balance(left->incref(), value, right->replace(v));
+        return balance(left->incref(), std::move(value), right->replace(v));
       } else {
         return new Node(left->incref(), right->incref(), v);
       }
@@ -408,9 +421,9 @@ namespace klee {
       return incref();
     } else {
       if (key_compare()(k, key_of_value()(value))) {
-        return balance(left->remove(k), value, right->incref());
+        return balance(left->remove(k), std::move(value), right->incref());
       } else if (key_compare()(key_of_value()(value), k)) {
-        return balance(left->incref(), value, right->remove(k));
+        return balance(left->incref(), std::move(value), right->remove(k));
       } else {
         if (left->isTerminator()) {
           return right->incref();
@@ -419,7 +432,7 @@ namespace klee {
         } else {
           value_type min;
           Node *nr = right->popMin(min);
-          return balance(left->incref(), min, nr);
+          return balance(left->incref(), std::move(min), nr);
         }
       }
     }
@@ -543,8 +556,8 @@ namespace klee {
 
   template<class K, class V, class KOV, class CMP>
   ImmutableTree<K,V,KOV,CMP> 
-  ImmutableTree<K,V,KOV,CMP>::insert(const value_type &&value) const { 
-    return ImmutableTree(node->insert(value)); 
+  ImmutableTree<K,V,KOV,CMP>::insert(value_type &&value) const {
+    return ImmutableTree(node->insert(std::move(value)));
   }
 
   template<class K, class V, class KOV, class CMP>

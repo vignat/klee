@@ -115,7 +115,7 @@ int LayoutManager::freshId() {
 int LayoutManager::insertANewLayout(MetaValue *l) {
   int id = freshId();
   layoutParts =
-    layoutParts.insert(std::make_pair
-                       (id, uptr<MetaValue> (l)));
+    layoutParts.insert(std::move(std::make_pair
+                                 (id, uptr<MetaValue>(l))));
   return id;
 }

@@ -315,7 +315,7 @@ CallInfo::CallInfo(const CallInfo& ci)
   : argsLayout(ci.argsLayout),
     extraPtees(ci.extraPtees),
     retLayout(ci.retLayout),
-    retValue(ci.retValue->makeCopy()),
+    retValue(ci.retValue ? ci.retValue->makeCopy() : nullptr),
     callContext(ci.callContext),
     returnContext(ci.returnContext),
     funName(ci.funName),
