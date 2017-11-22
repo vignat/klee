@@ -16,6 +16,7 @@
 #define KLEE_EXECUTOR_H
 
 #include "klee/ExecutionState.h"
+#include "klee/ArrayExprOptimizer.h"
 #include "klee/Interpreter.h"
 #include "klee/Internal/Module/Cell.h"
 #include "klee/Internal/Module/KInstruction.h"
@@ -229,6 +230,9 @@ private:
 
   void addState(ExecutionState *current,
                 ExecutionState *fresh);
+
+  /// Optimizes expressions
+  ExprOptimizer optimizer;
 
   llvm::Function* getTargetFunction(llvm::Value *calledVal,
                                     ExecutionState &state);
