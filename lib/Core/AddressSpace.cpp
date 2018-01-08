@@ -35,9 +35,27 @@ const ObjectState *AddressSpace::findObject(const MemoryObject *mo) const {
   return res ? res->second : 0;
 }
 
+ObjectState *AddressSpace::allowAccess(const MemoryObject *mo,
+                               const ObjectState *os) {
+  assert(!os->readOnly);
+  assert(!os->isAccessible());
+
+  ObjectState *n;
+  if (cowKey==os->copyOnWriteOwner) {
+    n = const_cast<ObjectState*>(os);
+  } else {
+    n = new ObjectState(*os);
+    n->copyOnWriteOwner = cowKey;
+    objects = objects.replace(std::make_pair(mo, n));
+  }
+  n->allowAccess();
+  return n;
+}
+
 ObjectState *AddressSpace::getWriteable(const MemoryObject *mo,
                                         const ObjectState *os) {
   assert(!os->readOnly);
+  assert(os->isAccessible());
 
   if (cowKey==os->copyOnWriteOwner) {
     return const_cast<ObjectState*>(os);
@@ -45,14 +63,14 @@ ObjectState *AddressSpace::getWriteable(const MemoryObject *mo,
     ObjectState *n = new ObjectState(*os);
     n->copyOnWriteOwner = cowKey;
     objects = objects.replace(std::make_pair(mo, n));
-    return n;    
+    return n;
   }
 }
 
 /// 
 
 bool AddressSpace::resolveOne(const ref<ConstantExpr> &addr, 
-                              ObjectPair &result) {
+                              ObjectPair &result) const {
   uint64_t address = addr->getZExtValue();
   MemoryObject hack(address);
 

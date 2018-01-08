@@ -59,6 +59,7 @@
 #include "llvm/Support/system_error.h"
 #endif
 
+
 #include <dirent.h>
 #include <signal.h>
 #include <unistd.h>
@@ -70,6 +71,8 @@
 #include <iomanip>
 #include <iterator>
 #include <sstream>
+#include <list>
+#include <iostream>
 
 
 using namespace llvm;
@@ -175,6 +178,19 @@ namespace {
             cl::init(""));
 
   cl::opt<bool>
+  DumpCallTracePrefixes("dump-call-trace-prefixes",
+                        cl::desc("Compute and dump all the prefixes for the call "
+                                 "traces, generated according to klee_trace_*."),
+                        cl::init(false));
+
+  cl::opt<bool>
+  DumpCallTraces("dump-call-traces",
+                 cl::desc("Dump call traces into separate file each. The call "
+                          "traces consist of function invocations with the "
+                          "klee_trace_ret* intrinsic labels."),
+                 cl::init(false));
+
+  cl::opt<bool>
   ReplayKeepSymbolic("replay-keep-symbolic",
                      cl::desc("Replay the test cases only by asserting "
                               "the bytes, not necessarily making them concrete."));
@@ -225,6 +241,32 @@ namespace {
 
 extern cl::opt<double> MaxTime;
 
+class KleeHandler;
+
+struct CallPathTip {
+  CallInfo call;
+  unsigned path_id;
+};
+
+class CallTree {
+  std::vector<CallTree* > children;
+  CallPathTip tip;
+  std::vector<std::vector<CallPathTip*> > groupChildren();
+public:
+  CallTree():children(), tip(){};
+  void addCallPath(std::vector<CallInfo>::const_iterator path_begin,
+                   std::vector<CallInfo>::const_iterator path_end,
+                   unsigned path_id);
+  void dumpCallPrefixes(std::list<CallInfo> accumulated_prefix,
+                        std::list<const std::vector<ref<Expr> >* >
+                        accumulated_context,
+                        KleeHandler* fileOpener);
+  void dumpCallPrefixesSExpr(std::list<CallInfo> accumulated_prefix,
+                             KleeHandler* fileOpener);
+
+  int refCount;
+};
+
 /***/
 
 class KleeHandler : public InterpreterHandler {
@@ -237,10 +279,14 @@ private:
 
   unsigned m_testIndex;  // number of tests written so far
   unsigned m_pathsExplored; // number of paths explored so far
+  unsigned m_callPathIndex; // number of call path strings dumped so far
+  unsigned m_callPathPrefixIndex; // number of call path strings dumped so far
 
   // used for writing .ktest files
   int m_argc;
   char **m_argv;
+
+  CallTree m_callTree;
 
 public:
   KleeHandler(int argc, char **argv);
@@ -256,6 +302,7 @@ public:
   void processTestCase(const ExecutionState  &state,
                        const char *errorMessage,
                        const char *errorSuffix);
+  void processCallPath(const ExecutionState &state);
 
   std::string getOutputFilename(const std::string &filename);
   llvm::raw_fd_ostream *openOutputFile(const std::string &filename);
@@ -270,6 +317,9 @@ public:
                                  std::vector<std::string> &results);
 
   static std::string getRunTimeLibraryPath(const char *argv0);
+  llvm::raw_fd_ostream  *openNextCallPathPrefixFile();
+
+  void dumpCallPathPrefixes();
 };
 
 KleeHandler::KleeHandler(int argc, char **argv)
@@ -280,6 +330,8 @@ KleeHandler::KleeHandler(int argc, char **argv)
     m_outputDirectory(),
     m_testIndex(0),
     m_pathsExplored(0),
+    m_callPathIndex(1),
+    m_callPathPrefixIndex(0),
     m_argc(argc),
     m_argv(argv) {
 
@@ -515,7 +567,7 @@ void KleeHandler::processTestCase(const ExecutionState &state,
       llvm::raw_fd_ostream *f = openTestFile("sym.path", id);
       for (std::vector<unsigned char>::iterator I = symbolicBranches.begin(), E = symbolicBranches.end(); I!=E; ++I) {
         *f << *I << "\n";
-      }
+     }
       delete f;
     }
 
@@ -546,6 +598,313 @@ void KleeHandler::processTestCase(const ExecutionState &state,
     }
   }
 }
+
+bool dumpCallInfo(const CallInfo& ci, llvm::raw_ostream& file) {
+  file << ci.callPlace.getLine() <<":" <<ci.f->getName() <<"(";
+  assert(ci.returned);
+  for (std::vector< CallArg >::const_iterator argIter = ci.args.begin(),
+         end = ci.args.end(); argIter != end; ++argIter) {
+    const CallArg *arg = &*argIter;
+    file <<arg->name <<":";
+    file <<*arg->expr;
+    if (arg->isPtr) {
+      file <<"&";
+      if (arg->funPtr == NULL) {
+        if (arg->pointee.doTraceValueIn ||
+            arg->pointee.doTraceValueOut) {
+          file <<"[";
+          if (arg->pointee.doTraceValueIn) {
+            file <<*arg->pointee.inVal;
+          }
+          if (arg->pointee.doTraceValueOut &&
+              arg->pointee.outVal.isNull()) return false;
+          file <<"->";
+          if (arg->pointee.doTraceValueOut) {
+            file <<*arg->pointee.outVal <<"]";
+          }
+          std::map<int, FieldDescr>::const_iterator i =
+            arg->pointee.fields.begin(),
+            e = arg->pointee.fields.end();
+          for (; i != e; ++i) {
+            file <<"[" <<i->second.name <<":";
+            if (i->second.doTraceValueIn ||
+                i->second.doTraceValueOut) {
+              if (i->second.doTraceValueIn) {
+                file <<*i->second.inVal;
+              }
+              file << "->";
+              if (i->second.doTraceValueOut &&
+                  i->second.outVal.isNull()) return false;
+              if (i->second.doTraceValueOut) {
+                file <<*i->second.outVal;
+              }
+              file <<"]";
+            } else {
+              file <<"(...)]";
+            }
+          }
+        } else {
+          file <<"[...]";
+        }
+      } else {
+        file <<arg->funPtr->getName();
+      }
+    }
+    if (argIter+1 != end)
+      file <<",";
+  }
+  file <<") -> ";
+  if (ci.ret.expr.isNull()) {
+    file <<"[]";
+  } else {
+    file <<*ci.ret.expr;
+    if (ci.ret.isPtr) {
+      file <<"&";
+      if (ci.ret.funPtr == NULL) {
+        if (ci.ret.pointee.doTraceValueOut) {
+          file <<"[" <<*ci.ret.pointee.outVal <<"]";
+          std::map<int, FieldDescr>::const_iterator
+            i = ci.ret.pointee.fields.begin(),
+            e = ci.ret.pointee.fields.end();
+          for (; i != e; ++i) {
+            file <<"[" <<i->second.name <<":";
+            if (i->second.doTraceValueOut) {
+              file <<*i->second.outVal << "]";
+            } else {
+              file <<"(...)]";
+            }
+          }
+        } else {
+          file <<"[...]";
+        }
+      } else {
+        file <<ci.ret.funPtr->getName();
+      }
+    }
+  }
+  file <<"\n";
+  return true;
+}
+
+void dumpPointeeInSExpr(const FieldDescr& pointee,
+                        llvm::raw_ostream& file);
+
+void dumpFieldsInSExpr(const std::map<int, FieldDescr>& fields,
+                       llvm::raw_ostream& file) {
+  file <<"(break_down (";
+  std::map<int, FieldDescr>::const_iterator i = fields.begin(),
+    e = fields.end();
+  for (; i != e; ++i) {
+    file <<"\n((fname \"" <<i->second.name <<"\") (value ";
+    dumpPointeeInSExpr(i->second, file);
+    file <<") (addr " <<i->second.addr <<"))";
+  }
+  file <<"))";
+}
+
+void dumpPointeeInSExpr(const FieldDescr& pointee,
+                        llvm::raw_ostream& file) {
+  file << "((full (";
+  if (pointee.doTraceValueIn) {
+    file <<*pointee.inVal;
+  }
+  file <<"))\n (sname (";
+  if (!pointee.type.empty()) {
+    file <<pointee.type;
+  }
+  file << "))\n";
+  dumpFieldsInSExpr(pointee.fields, file);
+  file <<")";
+}
+
+void dumpPointeeOutSExpr(const FieldDescr& pointee,
+                         llvm::raw_ostream& file);
+
+void dumpFieldsOutSExpr(const std::map<int, FieldDescr>& fields,
+                        llvm::raw_ostream& file) {
+  file <<"(break_down (";
+  std::map<int, FieldDescr>::const_iterator i = fields.begin(),
+    e = fields.end();
+  for (; i != e; ++i) {
+    file <<"\n((fname \"" <<i->second.name <<"\") (value ";
+    dumpPointeeOutSExpr(i->second, file);
+    file <<") (addr " <<i->second.addr <<" ))";
+  }
+  file <<"))";
+}
+
+void dumpPointeeOutSExpr(const FieldDescr& pointee,
+                         llvm::raw_ostream& file) {
+  file <<"((full (";
+  if (pointee.doTraceValueOut) {
+    file <<*pointee.outVal;
+  }
+  file <<"))\n (sname (";
+  if (!pointee.type.empty()) {
+    file <<pointee.type;
+  }
+  file <<"))\n";
+  dumpFieldsOutSExpr(pointee.fields, file);
+  file <<")";
+}
+
+bool dumpCallArgSExpr(const CallArg *arg, llvm::raw_ostream& file) {
+  file <<"\n((aname \"" <<arg->name <<"\")\n";
+  file <<"(value " <<*arg->expr <<")\n";
+  file <<"(ptr ";
+  if (arg->isPtr) {
+    if (arg->funPtr == NULL) {
+      if (arg->pointee.doTraceValueIn ||
+          arg->pointee.doTraceValueOut) {
+        file <<"(Curioptr\n";
+        file <<"((before ";
+        dumpPointeeInSExpr(arg->pointee, file);
+        file <<")\n";
+        file <<"(after ";
+        dumpPointeeOutSExpr(arg->pointee, file);
+        file <<")))\n";
+      } else {
+        file <<"Apathptr";
+      }
+    } else {
+      file <<"(Funptr \"" <<arg->funPtr->getName() <<"\")";
+    }
+  } else {
+    file <<"Nonptr";
+  }
+  file <<"))";
+  return true;
+}
+
+void dumpRetSExpr(const RetVal& ret, llvm::raw_ostream& file) {
+  if (ret.expr.isNull()) {
+    file <<"(ret ())";
+  } else {
+    file <<"(ret (((value " <<*ret.expr <<")\n";
+    file <<"(ptr ";
+    if (ret.isPtr) {
+      if (ret.funPtr == NULL) {
+        if (ret.pointee.doTraceValueIn ||
+            ret.pointee.doTraceValueOut) {
+          file <<"(Curioptr ((before ((full ()) (break_down ()) (sname ()))) (after ";
+          dumpPointeeOutSExpr(ret.pointee, file);
+          file <<")))\n";
+        } else {
+          file <<"Apathptr";
+        }
+      } else {
+        file <<"(Funptr \"" <<ret.funPtr->getName() <<"\")";
+      }
+    } else {
+      file <<"Nonptr";
+    }
+    file <<"))))\n";
+  }
+}
+
+bool dumpExtraPtrSExpr(const CallExtraPtr& cep, llvm::raw_ostream& file) {
+  file <<"\n((pname \"" <<cep.name <<"\")\n";
+  file <<"(value " <<cep.ptr <<")\n";
+  file <<"(ptee ";
+  if (cep.accessibleIn) {
+    if (cep.accessibleOut) {
+      file <<"(Changing (";
+      dumpPointeeInSExpr(cep.pointee, file);
+      file <<"\n";
+      dumpPointeeOutSExpr(cep.pointee, file);
+      file <<"))\n";
+    } else {
+      file <<"(Closing ";
+      dumpPointeeOutSExpr(cep.pointee, file);
+      file <<")\n";
+    }
+  } else {
+    if (cep.accessibleOut) {
+      file <<"(Opening ";
+      dumpPointeeInSExpr(cep.pointee, file);
+      file <<")\n";
+    } else {
+      llvm::errs() <<"The extra pointer must be accessible either at "
+                   <<"the beginning of a function, at its end or both.\n";
+      return false;
+    }
+  }
+  file <<"))\n";
+  return true;
+}
+
+bool dumpCallInfoSExpr(const CallInfo& ci, llvm::raw_ostream& file) {
+  file <<"((fun_name \"" <<ci.f->getName() <<"\")\n (args (";
+  assert(ci.returned);
+  for (std::vector< CallArg >::const_iterator argIter = ci.args.begin(),
+         end = ci.args.end(); argIter != end; ++argIter) {
+    const CallArg *arg = &*argIter;
+    if (!dumpCallArgSExpr(arg, file)) return false;
+  }
+  file <<"))\n";
+  file <<"(extra_ptrs (";
+  std::map<size_t, CallExtraPtr>::const_iterator i = ci.extraPtrs.begin(),
+    e = ci.extraPtrs.end();
+  for (; i != e; ++i) {
+    dumpExtraPtrSExpr(i->second, file);
+  }
+  file <<"))\n";
+  dumpRetSExpr(ci.ret, file);
+  file <<"(call_context (";
+  for (std::vector<ref<Expr> >::const_iterator cci = ci.callContext.begin(),
+         cce = ci.callContext.end(); cci != cce; ++cci) {
+    file <<"\n" <<**cci;
+  }
+  file <<"))\n";
+  file <<"(ret_context (";
+  for (std::vector<ref<Expr> >::const_iterator rci = ci.returnContext.begin(),
+         rce = ci.returnContext.end(); rci != rce; ++rci) {
+    file <<"\n" <<**rci;
+  }
+  file <<")))\n";
+  return true;
+}
+
+void KleeHandler::processCallPath(const ExecutionState &state) {
+  unsigned id = m_callPathIndex;
+  if (DumpCallTracePrefixes)
+    m_callTree.addCallPath(state.callPath.begin(),
+                           state.callPath.end(),
+                           id);
+
+  if (!DumpCallTraces) return;
+
+  ++m_callPathIndex;
+
+  std::stringstream filename;
+  filename << "call-path" << std::setfill('0') << std::setw(6) << id << '.' << "txt";
+  llvm::raw_ostream *file = openOutputFile(filename.str());
+  for (std::vector<CallInfo>::const_iterator iter = state.callPath.begin(),
+         end = state.callPath.end(); iter != end; ++iter) {
+    const CallInfo& ci = *iter;
+    bool dumped = dumpCallInfo(ci, *file);
+    if (!dumped) break;
+  }
+  *file <<";;-- Constraints --\n";
+  for (ConstraintManager::constraint_iterator ci = state.constraints.begin(),
+         cEnd = state.constraints.end(); ci != cEnd; ++ci) {
+    *file <<**ci<<"\n";
+  }
+  delete file;
+}
+
+llvm::raw_fd_ostream *KleeHandler::openNextCallPathPrefixFile() {
+  unsigned id = ++m_callPathPrefixIndex;
+  std::stringstream filename;
+  filename << "call-prefix" << std::setfill('0') << std::setw(6) << id << '.' << "txt";
+  return openOutputFile(filename.str());
+}
+
+void KleeHandler::dumpCallPathPrefixes() {
+  m_callTree.dumpCallPrefixesSExpr(std::list<CallInfo>(), this);
+  //m_callTree.dumpCallPrefixes(std::list<CallInfo>(), std::list<const std::vector<ref<Expr> >* >(), this);
+}
+
 
   // load a .path file
 void KleeHandler::loadPathFile(std::string name,
@@ -629,6 +988,249 @@ std::string KleeHandler::getRunTimeLibraryPath(const char *argv0) {
   KLEE_DEBUG_WITH_TYPE("klee_runtime", llvm::dbgs() <<
                        libDir.c_str() << "\n");
   return libDir.str();
+}
+
+void CallTree::addCallPath(std::vector<CallInfo>::const_iterator path_begin,
+                           std::vector<CallInfo>::const_iterator path_end,
+                           unsigned path_id) {
+  //TODO: do we process constraints (what if they are different from the old ones?)
+  //TODO: record assumptions for each item in the call-path, because, when
+  // comparing two paths in the tree they may differ only by the assumptions.
+  if (path_begin == path_end) return;
+  std::vector<CallInfo>::const_iterator next = path_begin;
+  ++next;
+  std::vector<CallTree*>::iterator i = children.begin(), ie = children.end();
+  for (; i != ie; ++i) {
+    if ((*i)->tip.call.eq(*path_begin)) {
+      (*i)->addCallPath(next, path_end, path_id);
+      return;
+    }
+  }
+  children.push_back(new CallTree());
+  CallTree* n = children.back();
+  n->tip.call = *path_begin;
+  n->tip.path_id = path_id;
+  n->addCallPath(next, path_end, path_id);
+}
+
+std::vector<std::vector<CallPathTip*> > CallTree::groupChildren() {
+  std::vector<std::vector<CallPathTip*> > ret;
+  for (unsigned ci = 0; ci < children.size(); ++ci) {
+    CallPathTip* current = &children[ci]->tip;
+    bool groupNotFound = true;
+    for (unsigned gi = 0; gi < ret.size(); ++gi) {
+      if (current->call.sameInvocation(&ret[gi][0]->call)) {
+        ret[gi].push_back(current);
+        groupNotFound = false;
+        break;
+      }
+    }
+    if (groupNotFound) {
+      ret.push_back(std::vector<CallPathTip*>());
+      ret.back().push_back(current);
+    }
+  }
+  return ret;
+}
+
+void dumpCallGroup(const std::vector<CallInfo*> group, llvm::raw_ostream& file) {
+  std::vector<CallInfo*>::const_iterator gi = group.begin(), ge = group.end();
+  file << (**gi).f->getName() <<"(";
+  for (unsigned argI = 0; argI < (**gi).args.size(); ++argI) {
+    const CallArg& arg = (**gi).args[argI];
+    file <<arg.name <<":";
+    file <<*arg.expr;
+    if (arg.isPtr) {
+      file <<"&";
+      if (arg.funPtr != NULL) {
+        file <<arg.funPtr->getName();
+      } else {
+        file <<"[" <<arg.pointee.inVal <<"->";
+        for (; gi != ge; ++gi) {
+          file <<*(**gi).args[argI].pointee.outVal <<"; ";
+        }
+        file <<"]";
+        gi = group.begin();
+        unsigned numFields = arg.pointee.fields.size();
+        for (; gi != ge; ++gi) {
+          assert((**gi).args[argI].pointee.fields.size() == numFields &&
+                 "Do not support variating the argument structure for different"
+                 " calls of the same function.");
+        }
+        gi = group.begin();
+        std::map<int, FieldDescr>::const_iterator
+          fi = arg.pointee.fields.begin(),
+          fe = arg.pointee.fields.end();
+        for (; fi != fe; ++fi) {
+          int fieldOffset = fi->first;
+          const FieldDescr& descr = fi->second;
+          file <<"[" <<descr.name <<":" <<*descr.inVal << "->";
+          for (; gi != ge; ++gi) {
+            std::map<int, FieldDescr>::const_iterator otherDescrI =
+              (**gi).args[argI].pointee.fields.find(fieldOffset);
+            assert(otherDescrI != (**gi).args[argI].pointee.fields.end() &&
+                   "The argument structure is different.");
+            file <<*otherDescrI->second.outVal <<";";
+          }
+          file <<"]";
+          gi = group.begin();
+        }
+      }
+    }
+  }
+  file <<") ->";
+  const RetVal& ret = (**gi).ret;
+  if (ret.expr.isNull()) {
+    for (; gi != ge; ++gi) {
+      assert((**gi).ret.expr.isNull() &&
+             "Do not support different return"
+             " behaviours for the same function.");
+    }
+    gi = group.begin();
+    file <<"[]";
+  } else {
+    if (ret.isPtr) {
+      for (; gi != ge; ++gi) {
+        assert((**gi).ret.isPtr &&
+               "Do not support different return"
+               " behaviours for the same function.");
+      }
+      gi = group.begin();
+      file <<"&";
+      if (ret.funPtr != NULL) {
+        for (; gi != ge; ++gi) {
+          assert((**gi).ret.funPtr != NULL &&
+                 "Do not support different return"
+                 " behaviours for the same function.");
+          file <<(**gi).ret.funPtr->getName() <<";";
+        }
+        gi = group.begin();
+      } else {
+        for (; gi != ge; ++gi) {
+          file <<*(**gi).ret.pointee.outVal <<";";
+        }
+        gi = group.begin();
+        std::map<int, FieldDescr>::const_iterator
+          fi = ret.pointee.fields.begin(),
+          fe = ret.pointee.fields.end();
+        for (; fi != fe; ++fi) {
+          int fieldOffset = fi->first;
+          const FieldDescr& descr = fi->second;
+          file <<"[" <<descr.name <<":";
+          for (; gi != ge; ++gi) {
+            std::map<int, FieldDescr>::const_iterator otherDescrI =
+              (**gi).ret.pointee.fields.find(fieldOffset);
+            assert(otherDescrI != (**gi).ret.pointee.fields.end() &&
+                   "The return structure is different.");
+            file <<*otherDescrI->second.outVal <<";";
+          }
+          file <<"]";
+          gi = group.begin();
+        }
+      }
+    } else {
+      for (; gi != ge; ++gi) {
+        file <<(**gi).ret.expr <<";";
+      }
+    }
+  }
+  file <<"\n";
+}
+
+void CallTree::dumpCallPrefixes(std::list<CallInfo> accumulated_prefix,
+                                std::list<const std::vector<ref<Expr> >* >
+                                accumulated_context,
+                                KleeHandler* fileOpener) {
+  std::vector<std::vector<CallPathTip*> > tipCalls = groupChildren();
+  std::vector<std::vector<CallPathTip*> >::iterator ti = tipCalls.begin(),
+    te = tipCalls.end();
+  for (; ti != te; ++ti) {
+    llvm::raw_ostream* file = fileOpener->openNextCallPathPrefixFile();
+    std::list<CallInfo>::iterator ai = accumulated_prefix.begin(),
+      ae = accumulated_prefix.end();
+    for (; ai != ae; ++ai) {
+      bool dumped = dumpCallInfo(*ai, *file);
+      assert(dumped);
+    }
+    *file <<"--- Constraints ---\n";
+    for (std::list<const std::vector<ref<Expr> >* >::const_iterator
+           cgi = accumulated_context.begin(),
+           cge = accumulated_context.end(); cgi != cge; ++cgi) {
+      for (std::vector<ref<Expr> >::const_iterator ci = (**cgi).begin(),
+             ce = (**cgi).end(); ci != ce; ++ci) {
+        *file <<**ci<<"\n";
+      }
+      *file<<"---\n";
+    }
+    *file <<"--- Alternatives ---\n";
+    //FIXME: currently there can not be more than one alternative.
+    *file <<"(or \n";
+    for (std::vector<CallPathTip*>::const_iterator chi = ti->begin(),
+           che = ti->end(); chi != che; ++chi) {
+      *file <<"(and \n";
+      bool dumped = dumpCallInfo((**chi).call, *file);
+      assert(dumped);
+      for (std::vector<ref<Expr> >::const_iterator ei =
+             (**chi).call.callContext.begin(),
+             ee = (**chi).call.callContext.end(); ei != ee; ++ei) {
+        *file <<**ei<<"\n";
+      }
+      for (std::vector<ref<Expr> >::const_iterator ei =
+             (**chi).call.returnContext.begin(),
+             ee = (**chi).call.returnContext.end(); ei != ee; ++ei) {
+        *file <<**ei<<"\n";
+      }
+      *file <<"true)\n";
+    }
+    *file <<"false)\n";
+    delete file;
+  }
+  std::vector< CallTree* >::iterator ci = children.begin(),
+    ce = children.end();
+  for (; ci != ce; ++ci) {
+    accumulated_prefix.push_back(( *ci )->tip.call);
+    accumulated_context.push_back(&(*ci)->tip.call.callContext);
+    accumulated_context.push_back(&(*ci)->tip.call.returnContext);
+    ( *ci )->dumpCallPrefixes(accumulated_prefix, accumulated_context, fileOpener);
+    accumulated_context.pop_back();
+    accumulated_context.pop_back();
+    accumulated_prefix.pop_back();
+  }
+}
+
+void CallTree::dumpCallPrefixesSExpr(std::list<CallInfo> accumulated_prefix,
+                                     KleeHandler* fileOpener) {
+  std::vector<std::vector<CallPathTip*> > tipCalls = groupChildren();
+  std::vector<std::vector<CallPathTip*> >::iterator ti = tipCalls.begin(),
+    te = tipCalls.end();
+  for (; ti != te; ++ti) {
+    llvm::raw_ostream* file = fileOpener->openNextCallPathPrefixFile();
+    std::list<CallInfo>::iterator ai = accumulated_prefix.begin(),
+      ae = accumulated_prefix.end();
+    *file <<"((history (\n";
+    for (; ai != ae; ++ai) {
+      bool dumped = dumpCallInfoSExpr(*ai, *file);
+      assert(dumped);
+    }
+    *file <<"))\n";
+    //FIXME: currently there can not be more than one alternative.
+    *file <<"(tip_calls (\n";
+    for (std::vector<CallPathTip*>::const_iterator chi = ti->begin(),
+           che = ti->end(); chi != che; ++chi) {
+      *file <<"; id: " <<(**chi).path_id <<"(" <<(**chi).call.callPlace.getLine() <<")\n";
+      bool dumped = dumpCallInfoSExpr((**chi).call, *file);
+      assert(dumped);
+    }
+    *file <<")))\n";
+    delete file;
+  }
+  std::vector< CallTree* >::iterator ci = children.begin(),
+    ce = children.end();
+  for (; ci != ce; ++ci) {
+    accumulated_prefix.push_back(( *ci )->tip.call);
+    ( *ci )->dumpCallPrefixesSExpr(accumulated_prefix, fileOpener);
+    accumulated_prefix.pop_back();
+  }
 }
 
 //===----------------------------------------------------------------------===//
@@ -760,6 +1362,19 @@ static const char *modelledExternals[] = {
   "klee_print_expr",
   "klee_print_range",
   "klee_report_error",
+  "klee_trace_param_fptr",
+  "klee_trace_param_i32",
+  "klee_trace_param_ptr",
+  "klee_trace_param_just_ptr",
+  "klee_trace_param_ptr_field",
+  "klee_trace_param_ptr_field_just_ptr",
+  "klee_trace_param_ptr_nested_field",
+  "klee_trace_ret",
+  "klee_induce_invariants",
+  "klee_trace_ret_ptr",
+  "klee_trace_ret_ptr_field",
+  "klee_forbid_access",
+  "klee_allow_access",
   "klee_set_forking",
   "klee_silent_exit",
   "klee_warning",
@@ -1329,6 +1944,7 @@ int main(int argc, char **argv, char **envp) {
     klee_message("Linking in library: %s.\n", libFilename);
     mainModule = klee::linkWithLibrary(mainModule, libFilename);
   }
+
   // Get the desired main function.  klee_main initializes uClibc
   // locale and other data and then calls main.
   Function *mainFn = mainModule->getFunction(EntryPoint);
@@ -1500,6 +2116,12 @@ int main(int argc, char **argv, char **envp) {
       }
     }
     interpreter->runFunctionAsMain(mainFn, pArgc, pArgv, pEnvp);
+    handler->getInfoStream()
+      << "KLEE: saving call prefixes \n";
+
+    if (DumpCallTracePrefixes)
+      handler->dumpCallPathPrefixes();
+
 
     while (!seeds.empty()) {
       kTest_free(seeds.back());

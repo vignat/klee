@@ -93,6 +93,11 @@
 #include "klee/Internal/Support/CompressionStream.h"
 #endif
 
+//TODO: generalize for otehr LLVM versions like the above
+#include <llvm/Analysis/LoopInfo.h>
+#include <llvm/Analysis/Dominators.h>
+
+
 #include <cassert>
 #include <algorithm>
 #include <iomanip>
@@ -171,6 +176,12 @@ namespace {
   cl::opt<bool>
   DebugCheckForImpliedValues("debug-check-for-implied-values");
 
+  cl::opt<bool>
+  DebugReportSymbdex("debug-report-symbdex",
+                     cl::desc("print stack trace for each symbolic "
+                              "indexing occurence (symbdex may "
+                              "considerably slow down symbolic "
+                              "execution)"));
 
   cl::opt<bool>
   SimplifySymIndices("simplify-sym-indices",
@@ -291,6 +302,7 @@ namespace {
 		    clEnumValN(Executor::ReadOnly, "ReadOnly", "Write to read-only memory"),
 		    clEnumValN(Executor::ReportError, "ReportError", "klee_report_error called"),
 		    clEnumValN(Executor::User, "User", "Wrong klee_* functions invocation"),
+		    clEnumValN(Executor::Inaccessible, "Inaccessible", "The memory access is forbidden for this address at this point by klee_forbid_access"),
 		    clEnumValN(Executor::Unhandled, "Unhandled", "Unhandled instruction hit"),
 		    clEnumValEnd),
 		  cl::ZeroOrMore);
@@ -338,6 +350,7 @@ const char *Executor::TerminateReasonNames[] = {
   [ ReadOnly ] = "readonly",
   [ ReportError ] = "reporterror",
   [ User ] = "user",
+  [ Inaccessible ] = "inaccessible",
   [ Unhandled ] = "xxx",
 };
 
@@ -427,7 +440,7 @@ const Module *Executor::setModule(llvm::Module *module,
                        interpreterHandler->getOutputFilename("assembly.ll"),
                        userSearcherRequiresMD2U());
   }
-  
+
   return module;
 }
 
@@ -1428,6 +1441,28 @@ void Executor::executeCall(ExecutionState &state,
   }
 }
 
+void Executor::addState(ExecutionState *current,
+                        ExecutionState *fresh) {
+  current->ptreeNode->data = 0;
+  std::pair<PTree::Node*, PTree::Node*> res =
+    processTree->split(current->ptreeNode, current, fresh);
+  current->ptreeNode = res.first;
+  fresh->ptreeNode = res.second;
+  addedStates.push_back(fresh);
+}
+
+void Executor::handleLoopAnalysis(BasicBlock *dst, BasicBlock *src,
+                                  ExecutionState &state) {
+  bool terminate = false;
+  state.updateLoopAnalysisForBlockTransfer(dst, src,
+                                           solver,
+                                           &terminate);
+  if (terminate) {
+    LOG_LA("Terminating state after loop analysis update.");
+    terminateState(state);
+  }
+}
+
 void Executor::transferToBasicBlock(BasicBlock *dst, BasicBlock *src, 
                                     ExecutionState &state) {
   // Note that in general phi nodes can reuse phi values from the same
@@ -1450,6 +1485,8 @@ void Executor::transferToBasicBlock(BasicBlock *dst, BasicBlock *src,
     PHINode *first = static_cast<PHINode*>(state.pc->inst);
     state.incomingBBIndex = first->getBasicBlockIndex(src);
   }
+
+  handleLoopAnalysis(dst, src, state);
 }
 
 void Executor::printFileLine(ExecutionState &state, KInstruction *ki,
@@ -1521,6 +1558,121 @@ static inline const llvm::fltSemantics * fpWidthToSemantics(unsigned width) {
   }
 }
 
+void dumpFields(std::map<int, klee::FieldDescr>* fields, size_t base,
+                const klee::ExecutionState& state) {
+  std::map<int, klee::FieldDescr>::iterator i = fields->begin(),
+    e = fields->end();
+  for (; i != e; ++i) {
+    int offset = i->first;
+    ref<klee::ConstantExpr> addrExpr =
+      klee::ConstantExpr::alloc(base + offset,
+                                sizeof(size_t)*8);
+    if (i->second.doTraceValueOut)
+      i->second.outVal = state.readMemoryChunk(addrExpr, i->second.width,
+                                               true);
+    if (i->second.addr == 0)
+      i->second.addr = base + offset;
+    else {
+      assert(i->second.addr == base + offset &&
+             "field address can not change during the execution.");
+    }
+    dumpFields(&i->second.fields, base + offset, state);
+  }
+}
+
+void klee::FillCallInfoOutput(Function* f,
+                              bool isVoidReturn,
+                              ref<Expr> result,
+                              const ExecutionState& state,
+                              const Executor& exec,
+                              CallInfo* info) {
+  llvm::Type *retType =
+    (dyn_cast<FunctionType>(cast<PointerType>(f->getType())->
+                            getElementType()))->
+    getReturnType();
+
+  assert(info->returned == false);
+  if (!isVoidReturn) {
+    info->ret.expr = result;
+    info->ret.isPtr = retType->isPointerTy();
+    if (info->ret.isPtr && info->ret.pointee.doTraceValueOut) {
+      llvm::Type *elementType = (cast<PointerType>(retType))->
+        getElementType();
+      assert(isa<klee::ConstantExpr>(result) &&
+             "No support for symbolic pointer return values.");
+      ref<klee::ConstantExpr> address = cast<klee::ConstantExpr>(result);
+      if (elementType->isFunctionTy()) {
+        uint64_t addr = address->getZExtValue();
+        info->ret.funPtr = (Function*) addr;
+      } else {
+        if (info->ret.pointee.width == 0) {
+          info->ret.pointee.width = exec.getWidthForLLVMType(elementType);
+        }
+        info->ret.pointee.outVal = state.readMemoryChunk(address,
+                                                         info->ret.pointee.width,
+                                                         true);
+        info->ret.funPtr = NULL;
+        size_t base = address->getZExtValue();
+        dumpFields(&info->ret.pointee.fields, base, state);
+      }
+    }
+    if (retType->isStructTy()) {
+      llvm::StructType *retS = cast<llvm::StructType>(retType);
+      assert(retS->getNumElements() == 2);
+      llvm::Type* ptrType = retS->getElementType(0);
+      llvm::Type* sizeType = retS->getElementType(1);
+      assert(ptrType->isPointerTy());
+      assert(sizeType->isIntegerTy());
+      assert(isa<klee::ConstantExpr>(result));
+      ref<klee::ConstantExpr> rez = cast<klee::ConstantExpr>(result);
+      ref<klee::ConstantExpr> rezP =
+        cast<klee::ConstantExpr>(ExtractExpr::create
+                                 (rez, 0, exec.getWidthForLLVMType(ptrType)));
+      ref<klee::ConstantExpr> rezS =
+        cast<klee::ConstantExpr>(ExtractExpr::create
+                                 (rez, exec.getWidthForLLVMType(ptrType),
+                                  exec.getWidthForLLVMType(sizeType)) );
+      Expr::Width width = 8*rezS->getZExtValue();
+      info->ret.isPtr = true;
+      info->ret.pointee.outVal = state.readMemoryChunk(rezP, width, true);
+      info->ret.funPtr = NULL;
+      info->ret.expr = rezP;
+    }
+  }
+
+  int numParams = info->args.size();
+  for (int i = 0; i < numParams; ++i) {
+    CallArg *arg = &info->args[i];
+    if (arg->isPtr && arg->pointee.doTraceValueOut
+        && arg->funPtr == NULL) {
+      info->args[i].pointee.outVal =
+        state.readMemoryChunk(arg->expr,
+                              arg->pointee.width,
+                              true);
+      size_t base = (cast<ConstantExpr>(arg->expr))->getZExtValue();
+      dumpFields(&arg->pointee.fields, base, state);
+    }
+  }
+  std::map<size_t, CallExtraPtr>::iterator i = info->extraPtrs.begin(),
+    e = info->extraPtrs.end();
+  for (; i != e; ++i) {
+    CallExtraPtr *extraPtr = &i->second;
+    size_t addr = i->first;
+    extraPtr->accessibleOut =
+      state.isAccessibleAddr(ConstantExpr::alloc(addr, 8*sizeof(size_t)));
+    extraPtr->pointee.outVal =
+      state.constraints.simplifyExpr
+      (state.readMemoryChunk(ConstantExpr::alloc(addr, 8*sizeof(size_t)),
+                             extraPtr->pointee.width,
+                             true));
+    dumpFields(&extraPtr->pointee.fields, addr, state);
+  }
+
+  info->returned = true;
+
+  state.recordRetConstraints(info);
+}
+
 void Executor::executeInstruction(ExecutionState &state, KInstruction *ki) {
   Instruction *i = ki->inst;
   switch (i->getOpcode()) {
@@ -1531,11 +1683,16 @@ void Executor::executeInstruction(ExecutionState &state, KInstruction *ki) {
     Instruction *caller = kcaller ? kcaller->inst : 0;
     bool isVoidReturn = (ri->getNumOperands() == 0);
     ref<Expr> result = ConstantExpr::alloc(0, Expr::Bool);
-    
+
     if (!isVoidReturn) {
       result = eval(ki, 0, state).value;
     }
-    
+
+    Function* f = ri->getParent()->getParent();
+    if (!state.callPath.empty() && f == state.callPath.back().f) {
+      CallInfo *info = &state.callPath.back();
+      FillCallInfoOutput(f, isVoidReturn, result, state, *this, info);
+    }
     if (state.stack.size() <= 1) {
       assert(!caller && "caller set on initial stack frame");
       terminateStateOnExit(state);
@@ -1632,10 +1789,12 @@ void Executor::executeInstruction(ExecutionState &state, KInstruction *ki) {
       if (statsTracker && state.stack.back().kf->trackCoverage)
         statsTracker->markBranchVisited(branches.first, branches.second);
 
-      if (branches.first)
+      if (branches.first) {
         transferToBasicBlock(bi->getSuccessor(0), bi->getParent(), *branches.first);
-      if (branches.second)
+      }
+      if (branches.second) {
         transferToBasicBlock(bi->getSuccessor(1), bi->getParent(), *branches.second);
+      }
     }
     break;
   }
@@ -1882,12 +2041,33 @@ void Executor::executeInstruction(ExecutionState &state, KInstruction *ki) {
     break;
   }
   case Instruction::PHI: {
+    if ((!state.loopInProcess.isNull() ||
+        (!state.analysedLoops.empty() &&
+         state.analysedLoops.count(state.stack.back().kf->loopInfo.getLoopFor
+                                   (ki->inst->getParent())))) &&
+        state.stack.back().kf->loopInfo.isLoopHeader
+        (ki->inst->getParent())) {
+      // Warning: untested!
+      // TODO: make sure all the PHIs are actually lifted in the loop header,
+      // and not left somewhere in the middle of the loop.
+      LOG_LA("Making PHI symbolic");
+      Expr::Width w = getWidthForLLVMType(ki->inst->getType());
+      static unsigned genId = 0;
+      const Array *array =
+        arrayCache.CreateArray("PHI_reset" + llvm::utostr(++genId),
+                               (w+7)/8);
+      UpdateList ul(array, 0);
+      // TODO: how do you specify width here?
+      ref<Expr> result = ReadExpr::create(ul, ConstantExpr::alloc(0, Expr::Int32));
+      bindLocal(ki, state, result);
+    } else {
 #if LLVM_VERSION_CODE >= LLVM_VERSION(3, 0)
-    ref<Expr> result = eval(ki, state.incomingBBIndex, state).value;
+      ref<Expr> result = eval(ki, state.incomingBBIndex, state).value;
 #else
-    ref<Expr> result = eval(ki, state.incomingBBIndex * 2, state).value;
+      ref<Expr> result = eval(ki, state.incomingBBIndex * 2, state).value;
 #endif
-    bindLocal(ki, state, result);
+      bindLocal(ki, state, result);
+    }
     break;
   }
 
@@ -2859,7 +3039,17 @@ void Executor::terminateState(ExecutionState &state) {
                       "replay did not consume all objects in test input.");
   }
 
-  interpreterHandler->incPathsExplored();
+  if (state.loopInProcess.isNull()) {
+    if (state.doTrace) {
+      interpreterHandler->processCallPath(state);
+    }
+    interpreterHandler->incPathsExplored();
+  }
+
+  ExecutionState *replacement = 0;
+  state.terminateState(&replacement);
+  assert(replacement != &state);
+  if (replacement) addState(&state, replacement);
 
   std::vector<ExecutionState *>::iterator it =
       std::find(addedStates.begin(), addedStates.end(), &state);
@@ -2993,7 +3183,8 @@ void Executor::terminateStateOnError(ExecutionState &state,
 
     interpreterHandler->processTestCase(state, msg.str().c_str(), suffix);
   }
-    
+  state.doTrace = false;
+
   terminateState(state);
 
   if (shouldExitOn(termReason))
@@ -3096,7 +3287,7 @@ void Executor::callExternalFunction(ExecutionState &state,
   }
 }
 
-/***/
+ /***/
 
 ref<Expr> Executor::replaceReadWithSymbolic(ExecutionState &state, 
                                             ref<Expr> e) {
@@ -3325,6 +3516,15 @@ void Executor::executeMemoryOperation(ExecutionState &state,
       value = state.constraints.simplifyExpr(value);
   }
 
+  if (DebugReportSymbdex) {
+    if (!isa<ConstantExpr>(address)) {
+      printf("\n");
+      printf("Some symbolic indexing going on here:\n");
+      printFileLine(state, (KInstruction*)state.pc, llvm::errs());
+      state.dumpStack(llvm::errs());
+    }
+  }
+
   // fast path: single in-bounds resolution
   ObjectPair op;
   bool success;
@@ -3358,26 +3558,35 @@ void Executor::executeMemoryOperation(ExecutionState &state,
 
     if (inBounds) {
       const ObjectState *os = op.second;
-      if (isWrite) {
-        if (os->readOnly) {
-          terminateStateOnError(state, "memory error: object read only",
-                                ReadOnly);
+      if (os->isAccessible()) {
+        if (isWrite) {
+          if (os->readOnly) {
+            terminateStateOnError(state,
+                                  "memory error: object read only",
+                                  ReadOnly);
+          } else {
+            ObjectState *wos = state.addressSpace.getWriteable(mo, os);
+            wos->write(offset, value);
+          }
         } else {
-          ObjectState *wos = state.addressSpace.getWriteable(mo, os);
-          wos->write(offset, value);
-        }          
+          ref<Expr> result = os->read(offset, type);
+
+          if (interpreterOpts.MakeConcreteSymbolic)
+            result = replaceReadWithSymbolic(state, result);
+
+          bindLocal(target, state, result);
+        }
       } else {
-        ref<Expr> result = os->read(offset, type);
-        
-        if (interpreterOpts.MakeConcreteSymbolic)
-          result = replaceReadWithSymbolic(state, result);
-        
-        bindLocal(target, state, result);
+        std::stringstream msg;
+        msg << "memory error: object inaccessible. ";
+        msg << "It is rendered inaccessible because: ";
+        msg << os->inaccessible_message;
+        terminateStateOnError(state, msg.str(), Inaccessible);
       }
 
       return;
     }
-  } 
+  }
 
   // we are on an error path (no resolution, multiple resolution, one
   // resolution with out of bounds)
@@ -3401,18 +3610,27 @@ void Executor::executeMemoryOperation(ExecutionState &state,
 
     // bound can be 0 on failure or overlapped 
     if (bound) {
-      if (isWrite) {
-        if (os->readOnly) {
-          terminateStateOnError(*bound, "memory error: object read only",
-                                ReadOnly);
+      if (os->isAccessible()) {
+        if (isWrite) {
+          if (os->readOnly) {
+            terminateStateOnError(*bound,
+                                  "memory error: object read only",
+                                  ReadOnly);
+          } else {
+            ObjectState *wos = bound->addressSpace.getWriteable(mo, os);
+            wos->write(mo->getOffsetExpr(address), value);
+          }
         } else {
-          ObjectState *wos = bound->addressSpace.getWriteable(mo, os);
-          wos->write(mo->getOffsetExpr(address), value);
+          ref<Expr> result = os->read(mo->getOffsetExpr(address), type);
+          bindLocal(target, *bound, result);
         }
-      } else {
-        ref<Expr> result = os->read(mo->getOffsetExpr(address), type);
-        bindLocal(target, *bound, result);
       }
+    } else {
+      std::stringstream msg;
+      msg << "memory error: object inaccessible. ";
+      msg << "It is rendered inaccessible because: ";
+      msg << os->inaccessible_message;
+      terminateStateOnError(state, msg.str(), Inaccessible);
     }
 
     unbound = branches.second;
@@ -3602,6 +3820,7 @@ void Executor::runFunctionAsMain(Function *f,
   processTree = 0;
 
   // hack to clear memory objects
+  kmodule->clearAnalysedLoops(); //Must be called before delete memry;
   delete memory;
   memory = new MemoryManager(NULL);
 
@@ -3722,6 +3941,7 @@ void Executor::doImpliedValueConcretization(ExecutionState &state,
                                             ref<Expr> e,
                                             ref<ConstantExpr> value) {
   abort(); // FIXME: Broken until we sort out how to do the write back.
+  //FIXME: handle ObjectState::accessible here.
 
   if (DebugCheckForImpliedValues)
     ImpliedValue::checkForImpliedValues(solver->solver, e, value);

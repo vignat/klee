@@ -10,6 +10,9 @@
 #ifndef KLEE_UTIL_BITARRAY_H
 #define KLEE_UTIL_BITARRAY_H
 
+#include <stdint.h>
+#include <string.h>
+
 namespace klee {
 
   // XXX would be nice not to have
@@ -18,11 +21,14 @@ namespace klee {
 class BitArray {
 private:
   uint32_t *bits;
-  
+
+  BitArray(const BitArray &); //Unimplemented;
+
 protected:
   static uint32_t length(unsigned size) { return (size+31)/32; }
 
 public:
+  BitArray() :bits() {}
   BitArray(unsigned size, bool value = false) : bits(new uint32_t[length(size)]) {
     memset(bits, value?0xFF:0, sizeof(*bits)*length(size));
   }
@@ -31,7 +37,7 @@ public:
   }
   ~BitArray() { delete[] bits; }
 
-  bool get(unsigned idx) { return (bool) ((bits[idx/32]>>(idx&0x1F))&1); }
+  bool get(unsigned idx) const { return (bool) ((bits[idx/32]>>(idx&0x1F))&1); }
   void set(unsigned idx) { bits[idx/32] |= 1<<(idx&0x1F); }
   void unset(unsigned idx) { bits[idx/32] &= ~(1<<(idx&0x1F)); }
   void set(unsigned idx, bool value) { if (value) set(idx); else unset(idx); }

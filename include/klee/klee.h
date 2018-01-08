@@ -10,6 +10,7 @@
 #ifndef __KLEE_H__
 #define __KLEE_H__
 
+#include <assert.h>
 #include "stdint.h"
 #include "stddef.h"
 
@@ -107,6 +108,10 @@ extern "C" {
      and may have peculiar semantics. */
 
   void klee_assume(uintptr_t condition);
+# define klee_note(condition) ( \
+                               klee_assert(condition),  \
+                               klee_assume(condition)  \
+                                )
   void klee_warning(const char *message);
   void klee_warning_once(const char *message);
   void klee_prefer_cex(void *object, uintptr_t condition);
@@ -154,6 +159,65 @@ extern "C" {
 
   /* Merge current states together if possible */
   void klee_merge();
+
+#define KLEE_TRACE_PARAM_PROTO(suffix, type) \
+  void klee_trace_param##suffix(type param, const char* name)
+  KLEE_TRACE_PARAM_PROTO(f, float);
+  KLEE_TRACE_PARAM_PROTO(d, double);
+  KLEE_TRACE_PARAM_PROTO(l, long);
+  KLEE_TRACE_PARAM_PROTO(ll, long long);
+  KLEE_TRACE_PARAM_PROTO(_i32, int32_t);
+  KLEE_TRACE_PARAM_PROTO(_i64, int64_t);
+#undef KLEE_TRACE_PARAM_PROTO
+  void klee_trace_param_ptr(void* ptr, int width, const char* name);
+  typedef enum TracingDirection {
+    TD_NONE= 0,
+    TD_IN = 1,
+    TD_OUT = 2,
+    TD_BOTH = 3
+  } TracingDirection;
+  void klee_trace_param_ptr_directed(void* ptr, int width,
+                                     const char* name,
+                                     TracingDirection td);
+  void klee_trace_param_tagged_ptr(void* ptr, int width,
+                                   const char* name, const char* type);
+  void klee_trace_param_just_ptr(void* ptr, int width, const char* name);
+  void klee_trace_param_fptr(void* ptr, const char* name);
+  void klee_trace_ret();
+  void klee_trace_ret_ptr(int width);
+  void klee_trace_ret_just_ptr(int width);
+
+  void klee_trace_param_ptr_field(void* ptr, int offset, int width, char* name);
+  void klee_trace_param_ptr_field_directed(void* ptr, int offset,
+                                           int width, char* name,
+                                           TracingDirection td);
+  void klee_trace_param_ptr_field_just_ptr(void* ptr, int offset,
+                                           int width, char* name);
+  void klee_trace_ret_ptr_field(int offset, int width, char* name);
+  void klee_trace_ret_ptr_field_just_ptr(int offset, int width, char* name);
+  void klee_trace_param_ptr_nested_field(void* ptr, int base_offset,
+                                         int offset, int width, char* name);
+  void klee_trace_ret_ptr_nested_field(int base_offset,
+                                       int offset, int width, char* name);
+  void klee_trace_extra_ptr(void* ptr, int width, char* name, char* type);
+  void klee_trace_extra_ptr_field(void* ptr, int offset, int width, char* name);
+  void klee_trace_extra_ptr_field_just_ptr(void* ptr, int offset,
+                                           int width, char* name);
+  void klee_trace_extra_ptr_nested_field(void* ptr, int base_offset,
+                                         int offset, int width, char* name);
+  void klee_trace_extra_ptr_nested_nested_field(void* ptr, int base_base_offset,
+                                                int base_offset, int offset,
+                                                int width, char* name);
+
+  void klee_forget_all();
+
+  int klee_induce_invariants();
+
+  void klee_forbid_access(void* ptr, int width, char* message);
+  void klee_allow_access(void* ptr, int width);
+
+  void klee_dump_constraints();
+
 #ifdef __cplusplus
 }
 #endif

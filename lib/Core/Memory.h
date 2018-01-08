@@ -173,6 +173,9 @@ public:
 
   bool readOnly;
 
+  bool accessible;
+  std::string inaccessible_message;
+
 public:
   /// Create a new object state for the given memory object with concrete
   /// contents. The initial contents are undefined, it is the callers
@@ -190,14 +193,22 @@ public:
 
   void setReadOnly(bool ro) { readOnly = ro; }
 
+  bool isAccessible() const { return accessible; }
+  void forbidAccess(const llvm::Twine &msg);
+  void forbidAccessWithLastMessage();
+  void allowAccess() { assert(!accessible); accessible = true; }
+
   // make contents all concrete and zero
   void initializeToZero();
   // make contents all concrete and random
   void initializeToRandom();
 
-  ref<Expr> read(ref<Expr> offset, Expr::Width width) const;
-  ref<Expr> read(unsigned offset, Expr::Width width) const;
-  ref<Expr> read8(unsigned offset) const;
+  ref<Expr> read(ref<Expr> offset, Expr::Width width,
+                 bool circumventInaccessibility = false) const;
+  ref<Expr> read(unsigned offset, Expr::Width width,
+                 bool circumventInaccessibility = false) const;
+  ref<Expr> read8(unsigned offset,
+                  bool circumventInaccessibility = false) const;
 
   // return bytes written.
   void write(unsigned offset, ref<Expr> value);
@@ -207,6 +218,9 @@ public:
   void write16(unsigned offset, uint16_t value);
   void write32(unsigned offset, uint32_t value);
   void write64(unsigned offset, uint64_t value);
+
+  void forgetThese(const BitArray *bytesToForget);
+  void forgetAll();
 
 private:
   const UpdateList &getUpdates() const;
@@ -234,10 +248,10 @@ private:
   void markByteUnflushed(unsigned offset);
   void setKnownSymbolic(unsigned offset, Expr *value);
 
-  void print();
+  void print() const;
   ArrayCache *getArrayCache() const;
 };
-  
+
 } // End klee namespace
 
 #endif

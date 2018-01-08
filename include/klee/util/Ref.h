@@ -37,13 +37,18 @@ public:
 
 private:
   void inc() const {
-    if (ptr)
+    if (ptr) {
+      assert(0 <= ptr->refCount);
       ++ptr->refCount;
+    }
   }
 
   void dec() const {
-    if (ptr && --ptr->refCount == 0)
-      delete ptr;
+    if (ptr) {
+      assert(0 < ptr->refCount);
+      if (--ptr->refCount == 0)
+        delete ptr;
+    }
   }
 
 public:

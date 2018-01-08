@@ -13,14 +13,25 @@
 #include "klee/Constraints.h"
 #include "klee/Expr.h"
 #include "klee/Internal/ADT/TreeStream.h"
+#include "klee/Internal/ADT/ImmutableSet.h"
+#include "klee/util/GetExprSymbols.h"
+#include "klee/LoopAnalysis.h"
 
 // FIXME: We do not want to be exposing these? :(
 #include "../../lib/Core/AddressSpace.h"
 #include "klee/Internal/Module/KInstIterator.h"
 
+//TODO: generalize for otehr LLVM versions like the above
+#include <llvm/Analysis/LoopInfo.h>
+
 #include <map>
 #include <set>
 #include <vector>
+
+namespace llvm {
+  class Function;
+  class BasicBlock;
+}
 
 namespace klee {
 class Array;
@@ -31,6 +42,7 @@ struct KInstruction;
 class MemoryObject;
 class PTreeNode;
 struct InstructionInfo;
+class TimingSolver;
 
 llvm::raw_ostream &operator<<(llvm::raw_ostream &os, const MemoryMap &mm);
 
@@ -59,6 +71,111 @@ struct StackFrame {
   StackFrame(KInstIterator caller, KFunction *kf);
   StackFrame(const StackFrame &s);
   ~StackFrame();
+};
+
+struct FieldDescr {
+  Expr::Width width;
+  std::string type;
+  std::string name;
+  size_t addr;
+  bool doTraceValueIn;
+  bool doTraceValueOut;
+  ref<Expr> inVal;
+  ref<Expr> outVal;
+  std::map<int, FieldDescr> fields;
+
+  bool sameInvocationValue(const FieldDescr& other) const;
+  bool eq(const FieldDescr& other) const;
+};
+
+struct CallArg {
+  ref<Expr> expr;
+  bool isPtr;
+  llvm::Function* funPtr;
+  std::string name;
+
+  FieldDescr pointee;
+
+  bool eq(const CallArg& other) const;
+  bool sameInvocationValue(const CallArg& other) const;
+};
+
+struct RetVal {
+  ref<Expr> expr;
+  bool isPtr;
+  llvm::Function* funPtr;
+
+  FieldDescr pointee;
+
+  bool eq(const RetVal& other) const;
+};
+
+struct CallExtraPtr {
+  size_t ptr;
+  FieldDescr pointee;
+  bool accessibleIn;
+  bool accessibleOut;
+
+  std::string name;
+
+  bool sameInvocationValue(const CallExtraPtr& other) const;
+  bool eq(const CallExtraPtr& other) const;
+};
+
+//TODO: Store assumptions increment as well. it is an important part of the call
+// these assumptions allow then to correctly match and distinguish call path prefixes.
+struct CallInfo {
+  llvm::Function* f;
+  std::vector<CallArg> args;
+  std::map<size_t, CallExtraPtr> extraPtrs;
+  RetVal ret;
+  bool returned;
+  std::vector< ref<Expr> > callContext;
+  std::vector< ref<Expr> > returnContext;
+  llvm::DebugLoc callPlace;
+
+  CallArg* getCallArgPtrp(ref<Expr> ptr);
+  bool eq(const CallInfo& other) const;
+  bool sameInvocation(const CallInfo* other) const;
+  SymbolSet computeRetSymbolSet() const;
+};
+
+class ExecutionState;
+
+/// @brief LoopInProcess keeps all the necessary information for
+/// dynamic loop invariant deduction.
+class LoopInProcess {
+public:
+  /// for the ref class. This count also determines how many
+  /// paths are in the loop.
+  int refCount;
+private:
+  ref<LoopInProcess> outer;
+  const llvm::Loop *loop; //Owner: KFunction::loopInfo
+  // No circular dependency here: the restartState must not have
+  // loop in process.
+  ExecutionState *restartState; //Owner.
+  bool lastRoundUpdated;
+  //Owner for the bitarrays.
+  StateByteMask changedBytes;
+  //std::set<const MemoryObject *> changedObjects;
+
+  ExecutionState *makeRestartState();
+
+public:
+  // Captures ownership of the _headerState.
+  // TODO: rewrite in terms of std::uniquePtr
+  LoopInProcess(const llvm::Loop *_loop, ExecutionState *_headerState,
+                const ref<LoopInProcess> &_outer);
+  ~LoopInProcess();
+
+  void updateChangedObjects(const ExecutionState& current, TimingSolver* solver);
+  ExecutionState* nextRoundState(bool *analysisFinished);
+
+  const llvm::Loop *getLoop() const { return loop; }
+  const StateByteMask &getChangedBytes() const { return changedBytes; }
+  const ExecutionState &getEntryState() const { return *restartState; }
+  const ref<LoopInProcess> &getOuter() const { return outer; }
 };
 
 /// @brief ExecutionState representing a path under exploration
@@ -93,6 +210,21 @@ public:
 
   /// @brief Address space used by this state (e.g. Global and Heap)
   AddressSpace addressSpace;
+
+  /// @brief Information necessary for loop invariant induction.
+  /// This is a stack capable of tracking loop nests.
+  /// Owner.
+  ref<LoopInProcess> loopInProcess;
+
+  /// @brief A message from the final round of loop analysis to the
+  /// klee_induce_invariants handler, to allow analysed loops
+  /// skip it with no effect.
+  ImmutableSet<const llvm::Loop*> analysedLoops;
+
+  /// @brief This pointer keeps a copy of the state in case
+  ///  we will need to process this loop. Owner.
+  // TODO: replace with std::unique_ptr;
+  ExecutionState *executionStateForLoopInProcess;
 
   /// @brief Constraints collected so far
   ConstraintManager constraints;
@@ -141,12 +273,28 @@ public:
   /// @brief Set of used array names for this state.  Used to avoid collisions.
   std::set<std::string> arrayNames;
 
+  std::vector<CallInfo> callPath;
+  SymbolSet relevantSymbols;
+
+  /// @brief: a flag indicating that the state is genuine and not
+  ///  a product of some ancillary analysis, like loop-invariant search.
+  bool doTrace;
+
+
   std::string getFnAlias(std::string fn);
   void addFnAlias(std::string old_fn, std::string new_fn);
   void removeFnAlias(std::string fn);
 
 private:
   ExecutionState() : ptreeNode(0) {}
+
+
+  void loopRepetition(const llvm::Loop *dstLoop,
+                      TimingSolver *solver,
+                      bool *terminate);
+  void loopEnter(const llvm::Loop *dstLoop);
+  void loopExit(const llvm::Loop *srcLoop,
+                bool *terminate);
 
 public:
   ExecutionState(KFunction *kf);
@@ -169,6 +317,65 @@ public:
 
   bool merge(const ExecutionState &b);
   void dumpStack(llvm::raw_ostream &out) const;
+  bool isAccessibleAddr(ref<Expr> addr) const;
+  ref<Expr> readMemoryChunk(ref<Expr> addr,
+                            Expr::Width width,
+                            bool circumventInaccessibility) const;
+  void traceArgValue(ref<Expr> val, std::string name);
+  void traceArgPtr(ref<Expr> arg, Expr::Width width,
+                   std::string name,
+                   std::string type,
+                   bool tracePointeeIn,
+                   bool tracePointeeOut);
+  void traceArgFunPtr(ref<Expr> arg,
+                      std::string name);
+  void traceRet();
+  void traceRetPtr(Expr::Width width,
+                   bool tracePointee);
+  void traceArgPtrField(ref<Expr> arg, int offset,
+                        Expr::Width width, std::string name,
+                        bool doTraceValueIn,
+                        bool doTraceValueOut);
+  void traceArgPtrNestedField(ref<Expr> arg, int base_offset, int offset,
+                              Expr::Width width, std::string name);
+  void traceExtraPtr(size_t ptr, Expr::Width width,
+                     std::string name,
+                     std::string type,
+                     bool tracePointee);
+  void traceExtraPtrField(size_t ptr, int offset,
+                          Expr::Width width, std::string name,
+                          bool doTraceValue);
+  void traceExtraPtrNestedField(size_t ptr,
+                                int base_offset,
+                                int offset,
+                                Expr::Width width,
+                                std::string name,
+                                bool doTraceValue);
+  void traceExtraPtrNestedNestedField(size_t ptr,
+                                      int base_base_offset,
+                                      int base_offset,
+                                      int offset,
+                                      Expr::Width width,
+                                                      std::string name,
+                                      bool doTraceValue);
+  void traceRetPtrField(int offset, Expr::Width width, std::string name,
+                        bool doTraceValue);
+  void traceRetPtrNestedField(int base_offset, int offset,
+                              Expr::Width width, std::string name);
+
+  void recordRetConstraints(CallInfo *info) const;
+
+  void dumpConstraints() const;
+  void symbolizeConcretes();
+  ExecutionState* finishLoopRound(KFunction *kf);
+  void updateLoopAnalysisForBlockTransfer(llvm::BasicBlock *dst,
+                                          llvm::BasicBlock *src,
+                                          TimingSolver *solver,
+                                          bool *terminate);
+  std::vector<ref<Expr> > relevantConstraints(SymbolSet symbols) const;
+  void terminateState(ExecutionState **replace);
+  void induceInvariantsForThisLoop(KInstruction *target);
+  void startInvariantSearch();
 };
 }
 

@@ -41,6 +41,10 @@ public:
   // simplify the existing constraint set
   void simplifyForValidConstraint(ref<Expr> e);
 
+  void clear() {
+    constraints.clear();
+  }
+
   ref<Expr> simplifyExpr(ref<Expr> e) const;
 
   void addConstraint(ref<Expr> e);

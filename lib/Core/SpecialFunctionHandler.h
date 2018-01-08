@@ -137,6 +137,32 @@ namespace klee {
     HANDLER(handleMulOverflow);
     HANDLER(handleSubOverflow);
     HANDLER(handleDivRemOverflow);
+    HANDLER(handleTraceParam);
+    HANDLER(handleTraceParamPtr);
+    HANDLER(handleTraceParamPtrDirected);
+    HANDLER(handleTraceParamTaggedPtr);
+    HANDLER(handleTraceParamJustPtr);
+    HANDLER(handleTraceParamFPtr);
+    HANDLER(handleTraceRet);
+    HANDLER(handleTraceRetPtr);
+    HANDLER(handleTraceRetJustPtr);
+    HANDLER(handleTraceParamPtrField);
+    HANDLER(handleTraceParamPtrFieldDirected);
+    HANDLER(handleTraceParamPtrFieldJustPtr);
+    HANDLER(handleTraceRetPtrField);
+    HANDLER(handleTraceRetPtrFieldJustPtr);
+    HANDLER(handleTraceParamPtrNestedField);
+    HANDLER(handleTraceRetPtrNestedField);
+    HANDLER(handleTraceExtraPtr);
+    HANDLER(handleTraceExtraPtrField);
+    HANDLER(handleTraceExtraPtrFieldJustPtr);
+    HANDLER(handleTraceExtraPtrNestedField);
+    HANDLER(handleTraceExtraPtrNestedNestedField);
+    HANDLER(handleForgetAll);
+    HANDLER(handleInduceInvariants);
+    HANDLER(handleForbidAccess);
+    HANDLER(handleAllowAccess);
+    HANDLER(handleDumpConstraints);
 #undef HANDLER
   };
 } // End klee namespace

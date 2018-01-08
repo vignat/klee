@@ -256,6 +256,29 @@ bool IntrinsicCleanerPass::runOnBasicBlock(BasicBlock &b, Module &M) {
         dirty = true;
         break;
       }
+      // inspired by https://gitlab.doc.ic.ac.uk/dsl11/klee-cl/blob/two_thread_hack/lib/Module/LowerSSE.cpp
+      case Intrinsic::x86_sse2_storeu_dq: {
+        assert(ii->getNumArgOperands() == 2 && "wrong number of arguments");
+        Value *dst = ii->getArgOperand(0);
+        assert(dst && "Failed to get first argument");
+        Value *src = ii->getArgOperand(1);
+        assert(src && "Failed to get second argument");
+        LLVM_TYPE_Q VectorType* vecType = cast<VectorType>(src->getType());
+        PointerType *vecPointerType = PointerType::get(vecType, 0);
+        CastInst* cast = new BitCastInst(dst, vecPointerType, "", ii);
+        new StoreInst(src, cast, false, ii);
+        ii->eraseFromParent();
+        dirty = true;
+        break;
+      }
+      // consistency fences, just ignore them
+      case Intrinsic::x86_sse_sfence:
+      case Intrinsic::x86_sse2_lfence:
+      case Intrinsic::x86_sse2_mfence: {
+        ii->eraseFromParent();
+        dirty = true;
+        break;
+      }
       default:
         if (LowerIntrinsics)
           IL->LowerIntrinsicCall(ii);
