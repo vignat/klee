@@ -1633,11 +1633,15 @@ void Executor::executeInstruction(ExecutionState &state, KInstruction *ki) {
           Expr::Width to = getWidthForLLVMType(t);
             
           if (from != to) {
-            CallSite cs = (isa<InvokeInst>(caller) ? CallSite(cast<InvokeInst>(caller)) : 
-                           CallSite(cast<CallInst>(caller)));
+            bool isSExt = true;
+            if (isa<InvokeInst>(caller) || isa<CallInst>(caller)) {
+              CallSite cs = (isa<InvokeInst>(caller) ? CallSite(cast<InvokeInst>(caller)) : 
+                             CallSite(cast<CallInst>(caller)));
 
-            // XXX need to check other param attrs ?
-      bool isSExt = cs.paramHasAttr(0, llvm::Attribute::SExt);
+              // XXX need to check other param attrs ?
+              isSExt = cs.paramHasAttr(0, llvm::Attribute::SExt);
+            }
+
             if (isSExt) {
               result = SExtExpr::create(result, to);
             } else {
