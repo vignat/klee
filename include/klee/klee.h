@@ -204,6 +204,7 @@ extern "C" {
   KLEE_TRACE_PARAM_PROTO(_i32, int32_t);
   KLEE_TRACE_PARAM_PROTO(_u32, uint32_t);
   KLEE_TRACE_PARAM_PROTO(_i64, int64_t);
+  KLEE_TRACE_PARAM_PROTO(_u64, int64_t);
 #undef KLEE_TRACE_PARAM_PROTO
   void klee_trace_param_ptr(void* ptr, int width, const char* name);
   typedef enum TracingDirection {
