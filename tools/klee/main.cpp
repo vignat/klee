@@ -1311,6 +1311,7 @@ static const char *modelledExternals[] = {
   "klee_trace_param_ptr_field_directed",
   "klee_trace_param_ptr_nested_field_directed",
   "klee_trace_param_u16",
+  "klee_trace_param_u64",
 
   // special functions
   "_stdio_init",
