@@ -418,7 +418,7 @@ const Module *Executor::setModule(llvm::Module *module,
   Context::initialize(TD->isLittleEndian(),
                       (Expr::Width) TD->getPointerSizeInBits());
 
-  specialFunctionHandler = new SpecialFunctionHandler(*this);
+  specialFunctionHandler = new SpecialFunctionHandler(*this, this->solver);
 
   specialFunctionHandler->prepare();
   kmodule->prepare(opts, interpreterHandler);
@@ -493,7 +493,7 @@ void Executor::initializeGlobalObject(ExecutionState &state, ObjectState *os,
     if (StoreBits > C->getWidth())
       C = C->ZExt(StoreBits);
 
-    os->write(offset, C);
+    os->write(state, this->solver, offset, C);
   }
 }
 
@@ -1347,7 +1347,7 @@ void Executor::executeCall(ExecutionState &state,
           // FIXME: This is really specific to the architecture, not the pointer
           // size. This happens to work for x86-32 and x86-64, however.
           if (WordSize == Expr::Int32) {
-            os->write(offset, arguments[i]);
+            os->write(state, this->solver, offset, arguments[i]);
             offset += Expr::getMinBytesForWidth(arguments[i]->getWidth());
           } else {
             assert(WordSize == Expr::Int64 && "Unknown word size!");
@@ -1356,7 +1356,7 @@ void Executor::executeCall(ExecutionState &state,
             if (argWidth > Expr::Int64) {
               offset = llvm::RoundUpToAlignment(offset, 16);
             }
-            os->write(offset, arguments[i]);
+            os->write(state, this->solver, offset, arguments[i]);
             offset += llvm::RoundUpToAlignment(argWidth, WordSize) / 8;
           }
         }
@@ -1480,7 +1480,7 @@ static inline const llvm::fltSemantics * fpWidthToSemantics(unsigned width) {
   }
 }
 
-void dumpFields(std::map<int, klee::FieldDescr>* fields, size_t base,
+void dumpFields(TimingSolver *solver, std::map<int, klee::FieldDescr>* fields, size_t base,
                 const klee::ExecutionState& state) {
   std::map<int, klee::FieldDescr>::iterator i = fields->begin(),
     e = fields->end();
@@ -1490,7 +1490,7 @@ void dumpFields(std::map<int, klee::FieldDescr>* fields, size_t base,
       klee::ConstantExpr::alloc(base + offset,
                                 sizeof(size_t)*8);
     if (i->second.doTraceValueOut)
-      i->second.outVal = state.readMemoryChunk(addrExpr, i->second.width,
+      i->second.outVal = state.readMemoryChunk(solver, addrExpr, i->second.width,
                                                true);
     if (i->second.addr == 0)
       i->second.addr = base + offset;
@@ -1498,11 +1498,11 @@ void dumpFields(std::map<int, klee::FieldDescr>* fields, size_t base,
       assert(i->second.addr == base + offset &&
              "field address can not change during the execution.");
     }
-    dumpFields(&i->second.fields, base + offset, state);
+    dumpFields(solver, &i->second.fields, base + offset, state);
   }
 }
 
-void klee::FillCallInfoOutput(Function* f,
+void klee::FillCallInfoOutput(TimingSolver *solver, Function* f,
                               bool isVoidReturn,
                               ref<Expr> result,
                               const ExecutionState& state,
@@ -1530,12 +1530,12 @@ void klee::FillCallInfoOutput(Function* f,
         if (info->ret.pointee.width == 0) {
           info->ret.pointee.width = exec.getWidthForLLVMType(elementType);
         }
-        info->ret.pointee.outVal = state.readMemoryChunk(address,
+        info->ret.pointee.outVal = state.readMemoryChunk(solver, address,
                                                          info->ret.pointee.width,
                                                          true);
         info->ret.funPtr = NULL;
         size_t base = address->getZExtValue();
-        dumpFields(&info->ret.pointee.fields, base, state);
+        dumpFields(solver, &info->ret.pointee.fields, base, state);
       }
     }
     if (retType->isStructTy()) {
@@ -1556,7 +1556,7 @@ void klee::FillCallInfoOutput(Function* f,
                                   exec.getWidthForLLVMType(sizeType)) );
       Expr::Width width = 8*rezS->getZExtValue();
       info->ret.isPtr = true;
-      info->ret.pointee.outVal = state.readMemoryChunk(rezP, width, true);
+      info->ret.pointee.outVal = state.readMemoryChunk(solver, rezP, width, true);
       info->ret.funPtr = NULL;
       info->ret.expr = rezP;
     }
@@ -1568,11 +1568,11 @@ void klee::FillCallInfoOutput(Function* f,
     if (arg->isPtr && arg->pointee.doTraceValueOut
         && arg->funPtr == NULL) {
       arg->pointee.outVal =
-        state.readMemoryChunk(arg->expr,
+        state.readMemoryChunk(solver, arg->expr,
                               arg->pointee.width,
                               true);
       size_t base = (cast<ConstantExpr>(arg->expr))->getZExtValue();
-      dumpFields(&arg->pointee.fields, base, state);
+      dumpFields(solver, &arg->pointee.fields, base, state);
     }
   }
   std::map<size_t, CallExtraPtr>::iterator i = info->extraPtrs.begin(),
@@ -1584,10 +1584,10 @@ void klee::FillCallInfoOutput(Function* f,
       state.isAccessibleAddr(ConstantExpr::alloc(addr, 8*sizeof(size_t)));
     extraPtr->pointee.outVal =
       state.constraints.simplifyExpr
-      (state.readMemoryChunk(ConstantExpr::alloc(addr, 8*sizeof(size_t)),
+      (state.readMemoryChunk(solver, ConstantExpr::alloc(addr, 8*sizeof(size_t)),
                              extraPtr->pointee.width,
                              true));
-    dumpFields(&extraPtr->pointee.fields, addr, state);
+    dumpFields(solver, &extraPtr->pointee.fields, addr, state);
   }
 
   info->returned = true;
@@ -1613,7 +1613,7 @@ void Executor::executeInstruction(ExecutionState &state, KInstruction *ki) {
     Function* f = ri->getParent()->getParent();
     if (!state.callPath.empty() && f == state.callPath.back().f) {
       CallInfo *info = &state.callPath.back();
-      FillCallInfoOutput(f, isVoidReturn, result, state, *this, info);
+      FillCallInfoOutput(this->solver, f, isVoidReturn, result, state, *this, info);
     }
     if (state.stack.size() <= 1) {
       assert(!caller && "caller set on initial stack frame");
@@ -3244,7 +3244,7 @@ void Executor::callExternalFunction(ExecutionState &state,
       ConstantExpr::create((uint64_t)errno_addr, Expr::Int64), result);
   if (!resolved)
     klee_error("Could not resolve memory object for errno");
-  ref<Expr> errValueExpr = result.second->read(0, sizeof(*errno_addr) * 8);
+  ref<Expr> errValueExpr = result.second->read(state, this->solver, 0, sizeof(*errno_addr) * 8);
   ConstantExpr *errnoValue = dyn_cast<ConstantExpr>(errValueExpr);
   if (!errnoValue) {
     terminateStateOnExecError(state,
@@ -3377,7 +3377,7 @@ void Executor::executeAlloc(ExecutionState &state,
       if (reallocFrom) {
         unsigned count = std::min(reallocFrom->size, os->size);
         for (unsigned i=0; i<count; i++)
-          os->write(i, reallocFrom->read8(i));
+          os->write(state, this->solver, i, reallocFrom->read8(i));
         state.addressSpace.unbindObject(reallocFrom->getObject());
       }
     }
@@ -3626,10 +3626,10 @@ void Executor::executeMemoryOperation(ExecutionState &state,
                                   User);
           } else {
             ObjectState *wos = state.addressSpace.getWriteable(mo, os);
-            wos->write(offset, value);
+            wos->write(state, this->solver, offset, value);
           }
         } else {
-          ref<Expr> result = os->read(offset, type);
+          ref<Expr> result = os->read(state, this->solver, offset, type);
 
           if (interpreterOpts.MakeConcreteSymbolic)
             result = replaceReadWithSymbolic(state, result);
@@ -3678,10 +3678,10 @@ void Executor::executeMemoryOperation(ExecutionState &state,
                                   User);
           } else {
             ObjectState *wos = bound->addressSpace.getWriteable(mo, os);
-            wos->write(mo->getOffsetExpr(address), value);
+            wos->write(state, this->solver, mo->getOffsetExpr(address), value);
           }
         } else {
-          ref<Expr> result = os->read(mo->getOffsetExpr(address), type);
+          ref<Expr> result = os->read(state, this->solver, mo->getOffsetExpr(address), type);
           bindLocal(target, *bound, result);
         }
       } else {
@@ -3876,7 +3876,7 @@ void Executor::runFunctionAsMain(Function *f,
     for (int i=0; i<argc+1+envc+1+1; i++) {
       if (i==argc || i>=argc+1+envc) {
         // Write NULL pointer
-        argvOS->write(i * NumPtrBytes, Expr::createPointer(0));
+        argvOS->write(*state, this->solver, i * NumPtrBytes, Expr::createPointer(0));
       } else {
         char *s = i<argc ? argv[i] : envp[i-(argc+1)];
         int j, len = strlen(s);
@@ -3891,7 +3891,7 @@ void Executor::runFunctionAsMain(Function *f,
           os->write8(j, s[j]);
 
         // Write pointer to newly allocated and initialised argv/envp c-string
-        argvOS->write(i * NumPtrBytes, arg->getBaseExpr());
+        argvOS->write(*state, this->solver, i * NumPtrBytes, arg->getBaseExpr());
       }
     }
   }
@@ -4067,7 +4067,7 @@ void Executor::doImpliedValueConcretization(ExecutionState &state,
         assert(!os->readOnly && 
                "not possible? read only object with static read?");
         ObjectState *wos = state.addressSpace.getWriteable(mo, os);
-        wos->write(CE, it->second);
+        wos->write(state, this->solver, CE, it->second);
       }
     }
   }

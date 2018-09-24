@@ -202,16 +202,18 @@ public:
   // make contents all concrete and random
   void initializeToRandom();
 
-  ref<Expr> read(ref<Expr> offset, Expr::Width width,
+  ref<Expr> read(const ExecutionState &state, TimingSolver *solver,
+                 ref<Expr> offset, Expr::Width width,
                  bool circumventInaccessibility = false) const;
-  ref<Expr> read(unsigned offset, Expr::Width width,
+  ref<Expr> read(const ExecutionState &state, TimingSolver *solver,
+                 unsigned offset, Expr::Width width,
                  bool circumventInaccessibility = false) const;
   ref<Expr> read8(unsigned offset,
                   bool circumventInaccessibility = false) const;
 
   // return bytes written.
-  void write(unsigned offset, ref<Expr> value);
-  void write(ref<Expr> offset, ref<Expr> value);
+  void write(const ExecutionState &state, TimingSolver *solver, unsigned offset, ref<Expr> value);
+  void write(const ExecutionState &state, TimingSolver *solver, ref<Expr> offset, ref<Expr> value);
 
   void write8(unsigned offset, uint8_t value);
   void write16(unsigned offset, uint16_t value);
@@ -236,11 +238,12 @@ private:
 
   void makeSymbolic();
 
-  ref<Expr> read8(ref<Expr> offset) const;
-  void write8(unsigned offset, ref<Expr> value);
-  void write8(ref<Expr> offset, ref<Expr> value);
+  ref<Expr> read8(const ExecutionState &state, TimingSolver *solver, ref<Expr> offset) const;
+  void write8(const ExecutionState &state, TimingSolver *solver, unsigned offset, ref<Expr> value);
+  void write8(const ExecutionState &state, TimingSolver *solver, ref<Expr> offset, ref<Expr> value);
 
-  void fastRangeCheckOffset(ref<Expr> offset, unsigned *base_r, 
+  void fastRangeCheckOffset(const ExecutionState &state, TimingSolver *solver,
+                            ref<Expr> offset, unsigned *base_r,
                             unsigned *size_r) const;
   void flushRangeForRead(unsigned rangeBase, unsigned rangeSize) const;
   void flushRangeForWrite(unsigned rangeBase, unsigned rangeSize);

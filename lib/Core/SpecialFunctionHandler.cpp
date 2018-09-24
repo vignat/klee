@@ -211,8 +211,8 @@ int SpecialFunctionHandler::size() {
 	return sizeof(handlerInfo)/sizeof(handlerInfo[0]);
 }
 
-SpecialFunctionHandler::SpecialFunctionHandler(Executor &_executor) 
-  : executor(_executor) {}
+SpecialFunctionHandler::SpecialFunctionHandler(Executor &_executor, TimingSolver *_solver) 
+  : executor(_executor), solver(_solver) {}
 
 
 void SpecialFunctionHandler::prepare() {
@@ -423,7 +423,7 @@ void SpecialFunctionHandler::handleOpenMerge(ExecutionState &state,
   }
 
   state.openMergeStack.push_back(
-      ref<MergeHandler>(new MergeHandler(&executor, &state)));
+      ref<MergeHandler>(new MergeHandler(&executor, &state, this->solver)));
 
   if (DebugLogMerge)
     llvm::errs() << "open merge: " << &state << "\n";
@@ -680,7 +680,7 @@ void SpecialFunctionHandler::handleGetErrno(ExecutionState &state,
   if (!resolved)
     executor.terminateStateOnError(state, "Could not resolve address for errno",
                                    Executor::User);
-  executor.bindLocal(target, state, result.second->read(0, Expr::Int32));
+  executor.bindLocal(target, state, result.second->read(state, this->solver, 0, Expr::Int32));
 }
 
 void SpecialFunctionHandler::handleErrnoLocation(
@@ -1042,7 +1042,7 @@ void SpecialFunctionHandler::handleTraceExtraPtr(ExecutionState &state,
   }
 
   size_t ptr = (cast<ConstantExpr>(arguments[0]))->getZExtValue();
-  state.traceExtraPtr(ptr, width, name, type, trace_in, trace_out);
+  state.traceExtraPtr(this->solver, ptr, width, name, type, trace_in, trace_out);
 }
 
 
@@ -1055,7 +1055,7 @@ void SpecialFunctionHandler::handleTraceParamPtrNestedField
   Expr::Width width = (cast<klee::ConstantExpr>(arguments[3]))->getZExtValue();
   std::string name = readStringAtAddress(state, arguments[4]);
   width = width * 8;//Convert to bits.
-  state.traceArgPtrNestedField(arguments[0], base_offset, offset, width, name, true, true);
+  state.traceArgPtrNestedField(this->solver, arguments[0], base_offset, offset, width, name, true, true);
 }
 
 void SpecialFunctionHandler::handleTraceParamPtrNestedFieldDirected
@@ -1082,7 +1082,7 @@ void SpecialFunctionHandler::handleTraceParamPtrNestedFieldDirected
       return;
   }
 
-  state.traceArgPtrNestedField(arguments[0], base_offset, offset, width, name, trace_in, trace_out);
+  state.traceArgPtrNestedField(this->solver, arguments[0], base_offset, offset, width, name, trace_in, trace_out);
 }
 
 void SpecialFunctionHandler::handleTraceParamPtrField(ExecutionState &state,
@@ -1093,7 +1093,7 @@ void SpecialFunctionHandler::handleTraceParamPtrField(ExecutionState &state,
   Expr::Width width = (cast<klee::ConstantExpr>(arguments[2]))->getZExtValue();
   std::string name = readStringAtAddress(state, arguments[3]);
   width = width * 8;//Convert to bits.
-  state.traceArgPtrField(arguments[0], offset, width, name, true, true);
+  state.traceArgPtrField(this->solver, arguments[0], offset, width, name, true, true);
 }
 
 void SpecialFunctionHandler::handleTraceParamPtrFieldDirected(ExecutionState &state,
@@ -1117,7 +1117,7 @@ void SpecialFunctionHandler::handleTraceParamPtrFieldDirected(ExecutionState &st
          Executor::User);
       return;
   }
-  state.traceArgPtrField(arguments[0], offset, width, name, trace_in, trace_out);
+  state.traceArgPtrField(this->solver, arguments[0], offset, width, name, trace_in, trace_out);
 }
 
 void SpecialFunctionHandler::handleTraceExtraPtrField(ExecutionState &state,
@@ -1144,7 +1144,7 @@ void SpecialFunctionHandler::handleTraceExtraPtrField(ExecutionState &state,
       return;
   }
 
-  state.traceExtraPtrField(ptr, offset, width, name, trace_in, trace_out);
+  state.traceExtraPtrField(this->solver, ptr, offset, width, name, trace_in, trace_out);
 }
 
 void SpecialFunctionHandler::handleTraceExtraPtrNestedField
@@ -1173,7 +1173,7 @@ void SpecialFunctionHandler::handleTraceExtraPtrNestedField
       return;
   }
 
-  state.traceExtraPtrNestedField(ptr, base_offset, offset, width, name, trace_in, trace_out);
+  state.traceExtraPtrNestedField(this->solver, ptr, base_offset, offset, width, name, trace_in, trace_out);
 }
 
 void SpecialFunctionHandler::handleTraceExtraPtrNestedNestedField
@@ -1203,7 +1203,7 @@ void SpecialFunctionHandler::handleTraceExtraPtrNestedNestedField
       return;
   }
 
-  state.traceExtraPtrNestedNestedField(ptr, base_base_offset,
+  state.traceExtraPtrNestedNestedField(this->solver, ptr, base_base_offset,
                                        base_offset, offset, width, name, trace_in, trace_out);
 }
 
@@ -1217,7 +1217,7 @@ void SpecialFunctionHandler::handleTraceExtraPtrFieldJustPtr
   std::string name = readStringAtAddress(state, arguments[3]);
   width = width * 8;//Convert to bits.
   size_t ptr = (cast<ConstantExpr>(arguments[0]))->getZExtValue();
-  state.traceExtraPtrField(ptr, offset, width, name, false, false);
+  state.traceExtraPtrField(this->solver, ptr, offset, width, name, false, false);
 }
 
 void SpecialFunctionHandler::handleTraceParamPtrFieldJustPtr
@@ -1229,7 +1229,7 @@ void SpecialFunctionHandler::handleTraceParamPtrFieldJustPtr
   Expr::Width width = (cast<klee::ConstantExpr>(arguments[2]))->getZExtValue();
   std::string name = readStringAtAddress(state, arguments[3]);
   width = width * 8;//Convert to bits.
-  state.traceArgPtrField(arguments[0], offset, width, name, false, false);
+  state.traceArgPtrField(this->solver, arguments[0], offset, width, name, false, false);
 }
 
 void SpecialFunctionHandler::handleTraceParam(ExecutionState &state,
@@ -1272,7 +1272,7 @@ void SpecialFunctionHandler::handleTraceParamTaggedPtr(ExecutionState &state,
        Executor::User);
     return;
   }
-  state.traceArgPtr(arguments[0], width, name, type, trace_in, trace_out);
+  state.traceArgPtr(this->solver, arguments[0], width, name, type, trace_in, trace_out);
 }
 
 void SpecialFunctionHandler::handleTraceParamPtr(ExecutionState &state,
@@ -1283,7 +1283,7 @@ void SpecialFunctionHandler::handleTraceParamPtr(ExecutionState &state,
   Expr::Width width = (cast<klee::ConstantExpr>(arguments[1]))->getZExtValue();
   width = width * 8;//Convert to bits.
   std::string name = readStringAtAddress(state, arguments[2]);
-  state.traceArgPtr(arguments[0], width, name, "", true, true);
+  state.traceArgPtr(this->solver, arguments[0], width, name, "", true, true);
 }
 
 void SpecialFunctionHandler::handleTraceParamPtrDirected(ExecutionState &state,
@@ -1318,7 +1318,7 @@ void SpecialFunctionHandler::handleTraceParamPtrDirected(ExecutionState &state,
        Executor::User);
     return;
   }
-  state.traceArgPtr(arguments[0], width, name, "", trace_in, trace_out);
+  state.traceArgPtr(this->solver, arguments[0], width, name, "", trace_in, trace_out);
 }
 
 
@@ -1335,7 +1335,7 @@ void SpecialFunctionHandler::handleTraceParamJustPtr(ExecutionState &state,
   Expr::Width width = (cast<klee::ConstantExpr>(arguments[1]))->getZExtValue();
   width = width * 8;//Convert to bits.
   std::string name = readStringAtAddress(state, arguments[2]);
-  state.traceArgPtr(arguments[0], width, name, "", false, false);
+  state.traceArgPtr(this->solver, arguments[0], width, name, "", false, false);
 }
 
 void SpecialFunctionHandler::handleTraceParamFPtr(ExecutionState &state,

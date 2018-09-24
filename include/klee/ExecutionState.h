@@ -359,14 +359,16 @@ public:
   void addSymbolic(const MemoryObject *mo, const Array *array);
   void addConstraint(ref<Expr> e) { constraints.addConstraint(e); }
 
-  bool merge(const ExecutionState &b);
+  bool merge(const ExecutionState &b, TimingSolver *solver);
   void dumpStack(llvm::raw_ostream &out) const;
   bool isAccessibleAddr(ref<Expr> addr) const;
-  ref<Expr> readMemoryChunk(ref<Expr> addr,
+  ref<Expr> readMemoryChunk(TimingSolver *solver,
+                            ref<Expr> addr,
                             Expr::Width width,
                             bool circumventInaccessibility) const;
   void traceArgValue(ref<Expr> val, std::string name);
-  void traceArgPtr(ref<Expr> arg, Expr::Width width,
+  void traceArgPtr(TimingSolver *solver,
+                   ref<Expr> arg, Expr::Width width,
                    std::string name,
                    std::string type,
                    bool tracePointeeIn,
@@ -376,27 +378,33 @@ public:
   void traceRet();
   void traceRetPtr(Expr::Width width,
                    bool tracePointee);
-  void traceArgPtrField(ref<Expr> arg, int offset,
+  void traceArgPtrField(TimingSolver *solver,
+                        ref<Expr> arg, int offset,
                         Expr::Width width, std::string name,
                         bool doTraceValueIn,
                         bool doTraceValueOut);
-  void traceArgPtrNestedField(ref<Expr> arg, int base_offset, int offset,
+  void traceArgPtrNestedField(TimingSolver *solver,
+                              ref<Expr> arg, int base_offset, int offset,
                               Expr::Width width, std::string name,
                               bool trace_in, bool trace_out);
-  void traceExtraPtr(size_t ptr, Expr::Width width,
+  void traceExtraPtr(TimingSolver *solver,
+                     size_t ptr, Expr::Width width,
                      std::string name,
                      std::string type,
                      bool trace_in, bool trace_out);
-  void traceExtraPtrField(size_t ptr, int offset,
+  void traceExtraPtrField(TimingSolver *solver,
+                          size_t ptr, int offset,
                           Expr::Width width, std::string name,
                           bool trace_in, bool trace_out);
-  void traceExtraPtrNestedField(size_t ptr,
+  void traceExtraPtrNestedField(TimingSolver *solver,
+                                size_t ptr,
                                 int base_offset,
                                 int offset,
                                 Expr::Width width,
                                 std::string name,
                                 bool trace_in, bool trace_out);
-  void traceExtraPtrNestedNestedField(size_t ptr,
+  void traceExtraPtrNestedNestedField(TimingSolver* solver,
+                                      size_t ptr,
                                       int base_base_offset,
                                       int base_offset,
                                       int offset,

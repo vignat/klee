@@ -306,7 +306,7 @@ llvm::raw_ostream &klee::operator<<(llvm::raw_ostream &os, const MemoryMap &mm) 
   return os;
 }
 
-bool ExecutionState::merge(const ExecutionState &b) {
+bool ExecutionState::merge(const ExecutionState &b, TimingSolver *solver) {
   if (DebugLogStateMerge)
     llvm::errs() << "-- attempting merge of A:" << this << " with B:" << &b
                  << "--\n";
@@ -462,7 +462,7 @@ bool ExecutionState::merge(const ExecutionState &b) {
     for (unsigned i=0; i<mo->size; i++) {
       ref<Expr> av = wos->read8(i);
       ref<Expr> bv = otherOS->read8(i);
-      wos->write(i, SelectExpr::create(inA, av, bv));
+      wos->write(*this, solver, i, SelectExpr::create(inA, av, bv));
     }
   }
 
@@ -553,7 +553,8 @@ bool ExecutionState::isAccessibleAddr(ref<Expr> addr) const {
   return os->isAccessible();
 }
 
-ref<Expr> ExecutionState::readMemoryChunk(ref<Expr> addr,
+ref<Expr> ExecutionState::readMemoryChunk(TimingSolver *solver,
+                                          ref<Expr> addr,
                                           Expr::Width width,
                                           bool circumventInaccessibility) const {
   ObjectPair op;
@@ -565,7 +566,7 @@ ref<Expr> ExecutionState::readMemoryChunk(ref<Expr> addr,
   //FIXME: assume inbounds.
   ref<Expr> offset = mo->getOffsetExpr(address);
   assert(0 < width && "Can not read a zero-length value.");
-  return os->read(offset, width, circumventInaccessibility);
+  return os->read(*this, solver, offset, width, circumventInaccessibility);
 }
 
 void ExecutionState::traceRet() {
@@ -610,7 +611,8 @@ void ExecutionState::traceArgValue(ref<Expr> val, std::string name) {
                                      constrs.begin(), constrs.end());
 }
 
-void ExecutionState::traceArgPtr(ref<Expr> arg, Expr::Width width,
+void ExecutionState::traceArgPtr(TimingSolver *solver,
+                                 ref<Expr> arg, Expr::Width width,
                                  std::string name,
                                  std::string type,
                                  bool tracePointeeIn,
@@ -625,7 +627,7 @@ void ExecutionState::traceArgPtr(ref<Expr> arg, Expr::Width width,
   argInfo->pointee.doTraceValueOut = tracePointeeOut;
   SymbolSet symbols = GetExprSymbols::visit(arg);
   if (tracePointeeIn) {
-    argInfo->pointee.inVal = readMemoryChunk(arg, width, true);
+    argInfo->pointee.inVal = readMemoryChunk(solver, arg, width, true);
     SymbolSet indirectSymbols =
       GetExprSymbols::visit(argInfo->pointee.inVal);
     symbols.insert(indirectSymbols.begin(), indirectSymbols.end());
@@ -644,7 +646,8 @@ void ExecutionState::traceArgFunPtr(ref<Expr> arg,
   argInfo->funPtr = (Function*)address->getZExtValue();
 }
 
-void ExecutionState::traceArgPtrField(ref<Expr> arg,
+void ExecutionState::traceArgPtrField(TimingSolver *solver,
+                                      ref<Expr> arg,
                                       int offset,
                                       Expr::Width width,
                                       std::string name,
@@ -671,7 +674,7 @@ void ExecutionState::traceArgPtrField(ref<Expr> arg,
   if (doTraceValueIn) {
     ref<ConstantExpr> addrExpr = ConstantExpr::alloc(base + offset,
                                                      sizeof(size_t)*8);
-    descr.inVal = readMemoryChunk(addrExpr, width, true);
+    descr.inVal = readMemoryChunk(solver, addrExpr, width, true);
   }
   descr.addr = base + offset;
   descr.doTraceValueIn = doTraceValueIn;
@@ -679,7 +682,8 @@ void ExecutionState::traceArgPtrField(ref<Expr> arg,
   argInfo->pointee.fields[offset] = descr;
 }
 
-void ExecutionState::traceArgPtrNestedField(ref<Expr> arg,
+void ExecutionState::traceArgPtrNestedField(TimingSolver *solver,
+                                            ref<Expr> arg,
                                             int base_offset,
                                             int offset,
                                             Expr::Width width,
@@ -711,7 +715,7 @@ void ExecutionState::traceArgPtrNestedField(ref<Expr> arg,
   if (trace_in) {
     ref<ConstantExpr> addrExpr = ConstantExpr::alloc(base + base_offset + offset,
                                                      sizeof(size_t)*8);
-    descr.inVal = readMemoryChunk(addrExpr, width, true);
+    descr.inVal = readMemoryChunk(solver, addrExpr, width, true);
   }
   descr.addr = base + base_offset + offset;
   descr.doTraceValueIn = trace_in;
@@ -719,7 +723,8 @@ void ExecutionState::traceArgPtrNestedField(ref<Expr> arg,
   argInfo->pointee.fields[base_offset].fields[offset] = descr;
 }
 
-void ExecutionState::traceExtraPtrNestedField(size_t ptr,
+void ExecutionState::traceExtraPtrNestedField(TimingSolver *solver,
+                                              size_t ptr,
                                               int base_offset,
                                               int offset,
                                               Expr::Width width,
@@ -744,7 +749,7 @@ void ExecutionState::traceExtraPtrNestedField(size_t ptr,
   if (trace_in) {
     ref<ConstantExpr> addrExpr = ConstantExpr::alloc(base + base_offset + offset,
                                                      sizeof(size_t)*8);
-    descr.inVal = readMemoryChunk(addrExpr, width, true);
+    descr.inVal = readMemoryChunk(solver, addrExpr, width, true);
   }
   descr.addr = base + base_offset + offset;
   descr.doTraceValueIn = trace_in;
@@ -752,7 +757,8 @@ void ExecutionState::traceExtraPtrNestedField(size_t ptr,
   extraPtr->pointee.fields[base_offset].fields[offset] = descr;
 }
 
-void ExecutionState::traceExtraPtrNestedNestedField(size_t ptr,
+void ExecutionState::traceExtraPtrNestedNestedField(TimingSolver *solver,
+                                                    size_t ptr,
                                                     int base_base_offset,
                                                     int base_offset,
                                                     int offset,
@@ -787,7 +793,7 @@ void ExecutionState::traceExtraPtrNestedNestedField(size_t ptr,
   if (trace_in) {
     ref<ConstantExpr> addrExpr = ConstantExpr::alloc(descr.addr,
                                                      sizeof(size_t)*8);
-    descr.inVal = readMemoryChunk(addrExpr, width, true);
+    descr.inVal = readMemoryChunk(solver, addrExpr, width, true);
   }
   descr.doTraceValueIn = trace_in;
   descr.doTraceValueOut = trace_out;
@@ -798,7 +804,8 @@ void ExecutionState::traceExtraPtrNestedNestedField(size_t ptr,
 }
 
 
-void ExecutionState::traceExtraPtr(size_t ptr, Expr::Width width,
+void ExecutionState::traceExtraPtr(TimingSolver *solver,
+                                   size_t ptr, Expr::Width width,
                                    std::string name,
                                    std::string type,
                                    bool trace_in, bool trace_out) {
@@ -820,7 +827,7 @@ void ExecutionState::traceExtraPtr(size_t ptr, Expr::Width width,
   if (trace_in) {
     extraPtr->pointee.inVal =
       constraints.simplifyExpr
-      (readMemoryChunk(ConstantExpr::alloc(ptr, sizeof(size_t)*8), width, true));
+      (readMemoryChunk(solver, ConstantExpr::alloc(ptr, sizeof(size_t)*8), width, true));
     indirectSymbols = GetExprSymbols::visit(extraPtr->pointee.inVal);
   }
   std::vector<ref<Expr> > constrs = relevantConstraints(indirectSymbols);
@@ -828,7 +835,8 @@ void ExecutionState::traceExtraPtr(size_t ptr, Expr::Width width,
                                      constrs.begin(), constrs.end());
 }
 
-void ExecutionState::traceExtraPtrField(size_t ptr,
+void ExecutionState::traceExtraPtrField(TimingSolver* solver,
+                                        size_t ptr,
                                         int offset,
                                         Expr::Width width,
                                         std::string name,
@@ -846,7 +854,7 @@ void ExecutionState::traceExtraPtrField(size_t ptr,
   if (trace_in) {
     ref<ConstantExpr> addrExpr = ConstantExpr::alloc(base + offset,
                                                      sizeof(size_t)*8);
-    descr.inVal = readMemoryChunk(addrExpr, width, true);
+    descr.inVal = readMemoryChunk(solver, addrExpr, width, true);
   }
   descr.addr = base + offset;
   descr.doTraceValueIn = trace_in;

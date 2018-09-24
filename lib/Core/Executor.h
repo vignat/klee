@@ -552,7 +552,8 @@ public:
   int *getErrnoLocation(const ExecutionState &state) const;
 };
 
-void FillCallInfoOutput(llvm::Function* f,
+void FillCallInfoOutput(TimingSolver *solver,
+                        llvm::Function* f,
                         bool isVoidReturn,
                         ref<Expr> result,
                         const ExecutionState& state,

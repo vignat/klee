@@ -24,6 +24,7 @@ namespace klee {
   class Expr;
   class ExecutionState;
   struct KInstruction;
+  class TimingSolver;
   template<typename T> class ref;
   
   class SpecialFunctionHandler {
@@ -37,6 +38,7 @@ namespace klee {
 
     handlers_ty handlers;
     class Executor &executor;
+    TimingSolver *solver;
 
     struct HandlerInfo {
       const char *name;
@@ -71,7 +73,7 @@ namespace klee {
 
 
   public:
-    SpecialFunctionHandler(Executor &_executor);
+    SpecialFunctionHandler(Executor &_executor, TimingSolver *_solver);
 
     /// Perform any modifications on the LLVM module before it is
     /// prepared for execution. At the moment this involves deleting

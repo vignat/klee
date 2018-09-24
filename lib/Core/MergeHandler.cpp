@@ -96,7 +96,7 @@ void MergeHandler::addClosedState(ExecutionState *es,
     bool mergedSuccessful = false;
 
     for (auto& mState: cpv) {
-      if (mState->merge(*es)) {
+      if (mState->merge(*es, this->solver)) {
         executor->terminateState(*es);
         executor->inCloseMerge.erase(es);
         mergedSuccessful = true;
@@ -124,8 +124,8 @@ bool MergeHandler::hasMergedStates() {
   return (!reachedCloseMerge.empty());
 }
 
-MergeHandler::MergeHandler(Executor *_executor, ExecutionState *es)
-    : executor(_executor), openInstruction(es->steppedInstructions),
+MergeHandler::MergeHandler(Executor *_executor, ExecutionState *es, TimingSolver *_solver)
+    : executor(_executor), solver(_solver), openInstruction(es->steppedInstructions),
       closedStateCount(0), refCount(0) {
   executor->mergeGroups.push_back(this);
   addOpenState(es);

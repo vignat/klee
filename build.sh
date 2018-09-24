@@ -14,7 +14,6 @@ cd "$KLEE_DIR/build"
                      cmake \
                          -DENABLE_UNIT_TESTS=OFF \
                          -DBUILD_SHARED_LIBS=OFF \
-                         -DENABLE_KLEE_ASSERTS=OFF \
                          -DLLVM_CONFIG_BINARY="$KLEE_DIR/../llvm/Release/bin/llvm-config" \
                          -DLLVMCC="$KLEE_DIR/../llvm/Release/bin/clang" \
                          -DLLVMCXX="$KLEE_DIR/../llvm/Release/bin/clang++" \

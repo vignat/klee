@@ -362,11 +362,28 @@ isByteConcrete(i) => !isByteKnownSymbolic(i)
 !isByteFlushed(i) => (isByteConcrete(i) || isByteKnownSymbolic(i))
  */
 
-void ObjectState::fastRangeCheckOffset(ref<Expr> offset,
+void ObjectState::fastRangeCheckOffset(const ExecutionState &state,
+                                       TimingSolver *solver,
+                                       ref<Expr> offset,
                                        unsigned *base_r,
                                        unsigned *size_r) const {
-  *base_r = 0;
-  *size_r = size;
+  // If the flush would be very expensive, try asking the solver
+  if (size > 4096) {
+    klee_warning("Fast range check will not be fast because your object is huge.");
+    auto range = solver->getRange(state, offset);
+
+    ref<ConstantExpr> baseExpr, sizeExpr;
+    solver->getValue(state, range.first, baseExpr);
+    solver->getValue(state, range.second, sizeExpr);
+
+    *base_r = baseExpr->getZExtValue();
+    *size_r = sizeExpr->getZExtValue() - *base_r;
+
+    klee_warning("Slow range finished, base = %d, size = %d; instead of range 0 to %d", *base_r, *size_r, size);
+  } else {
+    *base_r = 0;
+    *size_r = size;
+  }
 }
 
 void ObjectState::flushRangeForRead(unsigned rangeBase, 
@@ -484,10 +501,10 @@ ref<Expr> ObjectState::read8(unsigned offset,
   }
 }
 
-ref<Expr> ObjectState::read8(ref<Expr> offset) const {
+ref<Expr> ObjectState::read8(const ExecutionState &state, TimingSolver *solver, ref<Expr> offset) const {
   assert(!isa<ConstantExpr>(offset) && "constant offset passed to symbolic read8");
   unsigned base, size;
-  fastRangeCheckOffset(offset, &base, &size);
+  fastRangeCheckOffset(state, solver, offset, &base, &size);
   flushRangeForRead(base, size);
 
   if (size>4096) {
@@ -511,7 +528,7 @@ void ObjectState::write8(unsigned offset, uint8_t value) {
   markByteUnflushed(offset);
 }
 
-void ObjectState::write8(unsigned offset, ref<Expr> value) {
+void ObjectState::write8(const ExecutionState& state, TimingSolver *solver,unsigned offset, ref<Expr> value) {
   // can happen when ExtractExpr special cases
   if (ConstantExpr *CE = dyn_cast<ConstantExpr>(value)) {
     write8(offset, (uint8_t) CE->getZExtValue(8));
@@ -523,17 +540,17 @@ void ObjectState::write8(unsigned offset, ref<Expr> value) {
   }
 }
 
-void ObjectState::write8(ref<Expr> offset, ref<Expr> value) {
+void ObjectState::write8(const ExecutionState& state, TimingSolver *solver, ref<Expr> offset, ref<Expr> value) {
   assert(accessible);
   assert(!isa<ConstantExpr>(offset) && "constant offset passed to symbolic write8");
   unsigned base, size;
-  fastRangeCheckOffset(offset, &base, &size);
+  fastRangeCheckOffset(state, solver, offset, &base, &size);
   flushRangeForWrite(base, size);
 
   if (size>4096) {
     std::string allocInfo;
     object->getAllocInfo(allocInfo);
-    klee_warning_once(0, "flushing %d bytes on read, may be slow and/or crash: %s", 
+    klee_warning_once(0, "flushing %d bytes on write, may be slow and/or crash: %s", 
                       size,
                       allocInfo.c_str());
   }
@@ -543,7 +560,8 @@ void ObjectState::write8(ref<Expr> offset, ref<Expr> value) {
 
 /***/
 
-ref<Expr> ObjectState::read(ref<Expr> offset, Expr::Width width,
+ref<Expr> ObjectState::read(const ExecutionState &state, TimingSolver *solver,
+                            ref<Expr> offset, Expr::Width width,
                             bool circumventInaccessibility) const {
   assert(circumventInaccessibility || accessible);
   // Truncate offset to 32-bits.
@@ -551,11 +569,11 @@ ref<Expr> ObjectState::read(ref<Expr> offset, Expr::Width width,
 
   // Check for reads at constant offsets.
   if (ConstantExpr *CE = dyn_cast<ConstantExpr>(offset))
-    return read(CE->getZExtValue(32), width, circumventInaccessibility);
+    return read(state, solver, CE->getZExtValue(32), width, circumventInaccessibility);
 
   // Treat bool specially, it is the only non-byte sized write we allow.
   if (width == Expr::Bool)
-    return ExtractExpr::create(read8(offset), 0, Expr::Bool);
+    return ExtractExpr::create(read8(state, solver, offset), 0, Expr::Bool);
 
   // Otherwise, follow the slow general case.
   unsigned NumBytes = width / 8;
@@ -563,7 +581,8 @@ ref<Expr> ObjectState::read(ref<Expr> offset, Expr::Width width,
   ref<Expr> Res(0);
   for (unsigned i = 0; i != NumBytes; ++i) {
     unsigned idx = Context::get().isLittleEndian() ? i : (NumBytes - i - 1);
-    ref<Expr> Byte = read8(AddExpr::create(offset, 
+    ref<Expr> Byte = read8(state, solver,
+                           AddExpr::create(offset, 
                                            ConstantExpr::create(idx, 
                                                                 Expr::Int32)));
     Res = i ? ConcatExpr::create(Byte, Res) : Byte;
@@ -572,7 +591,8 @@ ref<Expr> ObjectState::read(ref<Expr> offset, Expr::Width width,
   return Res;
 }
 
-ref<Expr> ObjectState::read(unsigned offset, Expr::Width width,
+ref<Expr> ObjectState::read(const ExecutionState& state, TimingSolver *solver,
+                            unsigned offset, Expr::Width width,
                             bool circumventInaccessibility) const {
   assert(circumventInaccessibility || accessible);
   // Treat bool specially, it is the only non-byte sized write we allow.
@@ -593,21 +613,21 @@ ref<Expr> ObjectState::read(unsigned offset, Expr::Width width,
   return Res;
 }
 
-void ObjectState::write(ref<Expr> offset, ref<Expr> value) {
+void ObjectState::write(const ExecutionState& state, TimingSolver *solver, ref<Expr> offset, ref<Expr> value) {
   assert(accessible);
   // Truncate offset to 32-bits.
   offset = ZExtExpr::create(offset, Expr::Int32);
 
   // Check for writes at constant offsets.
   if (ConstantExpr *CE = dyn_cast<ConstantExpr>(offset)) {
-    write(CE->getZExtValue(32), value);
+    write(state, solver, CE->getZExtValue(32), value);
     return;
   }
 
   // Treat bool specially, it is the only non-byte sized write we allow.
   Expr::Width w = value->getWidth();
   if (w == Expr::Bool) {
-    write8(offset, ZExtExpr::create(value, Expr::Int8));
+    write8(state, solver, offset, ZExtExpr::create(value, Expr::Int8));
     return;
   }
 
@@ -616,12 +636,13 @@ void ObjectState::write(ref<Expr> offset, ref<Expr> value) {
   assert(w == NumBytes * 8 && "Invalid write size!");
   for (unsigned i = 0; i != NumBytes; ++i) {
     unsigned idx = Context::get().isLittleEndian() ? i : (NumBytes - i - 1);
-    write8(AddExpr::create(offset, ConstantExpr::create(idx, Expr::Int32)),
+    write8(state, solver,
+           AddExpr::create(offset, ConstantExpr::create(idx, Expr::Int32)),
            ExtractExpr::create(value, 8 * i, Expr::Int8));
   }
 }
 
-void ObjectState::write(unsigned offset, ref<Expr> value) {
+void ObjectState::write(const ExecutionState& state, TimingSolver *solver, unsigned offset, ref<Expr> value) {
   assert(accessible);
   // Check for writes of constant values.
   if (ConstantExpr *CE = dyn_cast<ConstantExpr>(value)) {
@@ -642,7 +663,7 @@ void ObjectState::write(unsigned offset, ref<Expr> value) {
   // Treat bool specially, it is the only non-byte sized write we allow.
   Expr::Width w = value->getWidth();
   if (w == Expr::Bool) {
-    write8(offset, ZExtExpr::create(value, Expr::Int8));
+    write8(state, solver, offset, ZExtExpr::create(value, Expr::Int8));
     return;
   }
 
@@ -651,7 +672,7 @@ void ObjectState::write(unsigned offset, ref<Expr> value) {
   assert(w == NumBytes * 8 && "Invalid write size!");
   for (unsigned i = 0; i != NumBytes; ++i) {
     unsigned idx = Context::get().isLittleEndian() ? i : (NumBytes - i - 1);
-    write8(offset + idx, ExtractExpr::create(value, 8 * i, Expr::Int8));
+    write8(state, solver, offset + idx, ExtractExpr::create(value, 8 * i, Expr::Int8));
   }
 } 
 

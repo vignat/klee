@@ -79,6 +79,8 @@ class Instruction;
 }
 
 namespace klee {
+class TimingSolver;
+
 extern llvm::cl::opt<bool> UseMerge;
 
 extern llvm::cl::opt<bool> DebugLogMerge;
@@ -95,6 +97,7 @@ class ExecutionState;
 class MergeHandler {
 private:
   Executor *executor;
+  TimingSolver *solver;
 
   /// @brief The instruction count when the state ran into the klee_open_merge
   uint64_t openInstruction;
@@ -149,7 +152,7 @@ public:
   unsigned refCount;
 
 
-  MergeHandler(Executor *_executor, ExecutionState *es);
+  MergeHandler(Executor *_executor, ExecutionState *es, TimingSolver *_solver);
   ~MergeHandler();
 };
 }
