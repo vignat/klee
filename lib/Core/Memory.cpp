@@ -369,7 +369,6 @@ void ObjectState::fastRangeCheckOffset(const ExecutionState &state,
                                        unsigned *size_r) const {
   // If the flush would be very expensive, try asking the solver
   if (size > 4096) {
-    klee_warning("Fast range check will not be fast because your object is huge.");
     auto range = solver->getRange(state, offset);
 
     ref<ConstantExpr> baseExpr, sizeExpr;
@@ -378,8 +377,6 @@ void ObjectState::fastRangeCheckOffset(const ExecutionState &state,
 
     *base_r = baseExpr->getZExtValue();
     *size_r = sizeExpr->getZExtValue() - *base_r;
-
-    klee_warning("Slow range finished, base = %d, size = %d; instead of range 0 to %d", *base_r, *size_r, size);
   } else {
     *base_r = 0;
     *size_r = size;
