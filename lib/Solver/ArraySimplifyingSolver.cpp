@@ -109,7 +109,7 @@ void ArraySimplifyingSolver::fixQuery(const Query& query) {
     uint64_t maxValue = maxExpr->getZExtValue();
     uint64_t size = maxValue + 1; // maxValue is a 0-based index, size is 1-based!
 
-    klee_warning("Array %s is huge (%d), trimmed it to %d", pair.first->name.c_str(), pair.first->size, size);
+    klee_warning("Array %s is huge (%d), trimmed it to %lu", pair.first->name.c_str(), pair.first->size, size);
 
     const Array* arr = pair.first;
     const Array* rep;
