@@ -37,6 +37,9 @@ Solver *constructSolverChain(Solver *coreSolver,
                  baseSolverQuerySMT2LogPath.c_str());
   }
 
+  // has to be here to intercept initial values calls
+  solver = createArraySimplifyingSolver(solver);
+
   if (UseAssignmentValidatingSolver)
     solver = createAssignmentValidatingSolver(solver);
 

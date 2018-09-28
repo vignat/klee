@@ -241,6 +241,9 @@ namespace klee {
   /// \param s - The underlying solver to use.
   Solver *createFastCexSolver(Solver *s);
 
+  /// simplifies arrays
+  Solver *createArraySimplifyingSolver(Solver *s);
+
   /// createIndependentSolver - Create a solver which will eliminate any
   /// unnecessary constraints before propogating the query to the underlying
   /// solver.
