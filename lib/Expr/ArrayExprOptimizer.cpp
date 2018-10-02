@@ -71,18 +71,18 @@ void ExprOptimizer::optimizeExpr(const ref<Expr> &e, ref<Expr> &result,
           // Create new expression on indexes
           result = ExprRewriter::createOptExpr(e, arrays, idx_valIdx);
         } else {
-          klee_warning("OPT_I: infeasible branch!");
+          //klee_warning("OPT_I: infeasible branch!");
           result = ConstantExpr::create(0, Expr::Bool);
         }
         // Add new expression to cache
         if (result.get()) {
-          klee_warning("OPT_I: successful");
+          //klee_warning("OPT_I: successful");
           cacheExprOptimized[hash] = result;
         } else {
-          klee_warning("OPT_I: unsuccessful");
+          //klee_warning("OPT_I: unsuccessful");
         }
       } else {
-        klee_warning("OPT_I: unsuccessful");
+        //klee_warning("OPT_I: unsuccessful");
         cacheExprUnapplicable.insert(hash);
       }
     }
@@ -104,11 +104,11 @@ void ExprOptimizer::optimizeExpr(const ref<Expr> &e, ref<Expr> &result,
     ref<Expr> selectOpt =
         getSelectOptExpr(e, reads, readInfo, are.containsSymbolic());
     if (selectOpt.get()) {
-      klee_warning("OPT_V: successful");
+      //klee_warning("OPT_V: successful");
       result = selectOpt;
       cacheExprOptimized[hash] = result;
     } else {
-      klee_warning("OPT_V: unsuccessful");
+      //klee_warning("OPT_V: unsuccessful");
       cacheExprUnapplicable.insert(hash);
     }
   }
