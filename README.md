@@ -5,6 +5,8 @@ Changes:
 - Add loop-havocing functionality with automatic invariant inducing
 - Add memory-access restriction methods to allow/forbid code from accessing specific objects (so that their use as opaque pointers can be enforced)
 - Add array-trimming optimization to avoid passing enormous arrays to the solver if the query only needs a fraction of the array
+- Add read/write intercepts (to model hardware)
+- Add regex support for function aliases (to alias static inline functions whose name is mangled)
 - Merge ISSTA'17 "Accelerating Array Constraints in Symbolic Execution" work from Perry, Mattavelli, Zhang and Cadar.
 
 
