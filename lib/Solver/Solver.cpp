@@ -129,6 +129,8 @@ std::pair< ref<Expr>, ref<Expr> > Solver::getRange(const Query& query) {
   } else {
     // binary search for # of useful bits
     uint64_t lo=0, hi=width, mid, bits=0;
+    bits=hi;
+/* DOES NOT WORK, sometimes solver can't handle it
     while (lo<hi) {
       mid = lo + (hi - lo)/2;
       bool res;
@@ -151,7 +153,7 @@ std::pair< ref<Expr>, ref<Expr> > Solver::getRange(const Query& query) {
 
       bits = lo;
     }
-    
+    */
     // could binary search for training zeros and offset
     // min max but unlikely to be very useful
 

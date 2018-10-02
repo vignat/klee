@@ -49,10 +49,7 @@ public:
 
   ArrayReadFixer(std::map<const Array*, std::pair<const Array*, uint64_t>> _replacements) : replacements(_replacements) {}
 
-  Action visitRead(const ReadExpr& cre) {
-    // This is stupid but it seems the method isn't called if the parameter isn't const...
-    ReadExpr& re = (ReadExpr&) cre;
-
+  Action visitRead(const ReadExpr& re) {
     if (replacements.count(re.updates.root) == 0) {
       // Nothing to do
       return Action::doChildren();
@@ -60,22 +57,29 @@ public:
 
     auto rep = replacements[re.updates.root];
 
-    // replace the index to account for new minValue
+    // replace the index to account for new minValue, if needed
+    auto index = re.index;
     if (rep.second != 0) {
-      re.index = SubExpr::create(re.index, ConstantExpr::create(rep.second, rep.first->getDomain()));
+      index = SubExpr::create(re.index, ConstantExpr::create(rep.second, rep.first->getDomain()));
     }
 
-    // replace the array - can't do it in the updatelist (its array is const), but ReadExpr has a non-const updates
-    re.updates = UpdateList(rep.first, re.updates.head);
+    // replace the array
+    auto updates = UpdateList(rep.first, re.updates.head);
 
-    return Action::doChildren();
+    return Action::changeTo(ReadExpr::create(updates, index));
   }
+};
+
+struct FixResult {
+  ref<Expr> queryExpr;
+  const std::vector<ref<Expr>>& queryConstraints;
+  std::map<const Array*, std::pair<const Array*, uint64_t>> replacements;
 };
 
 class ArraySimplifyingSolver : public SolverImpl {
 private:
   Solver *solver;
-  std::map<const Array*, std::pair<const Array*, uint64_t>> fixQuery(const Query& query);
+  FixResult fixQuery(const Query& query);
 
 public:
   ArraySimplifyingSolver(Solver *_solver) : solver(_solver) {}
@@ -93,9 +97,12 @@ public:
   void setCoreSolverTimeout(double timeout);
 };
 
-std::map<const Array*, std::pair<const Array*, uint64_t>> ArraySimplifyingSolver::fixQuery(const Query& query) {
+FixResult ArraySimplifyingSolver::fixQuery(const Query& query) {
   ArrayIndexCollector coll;
   coll.visit(query.expr);
+  for (auto constraint : query.constraints) {
+    coll.visit(constraint);
+  }
 
   std::map<const Array*, std::pair<const Array*, uint64_t>> replacements;
 
@@ -122,7 +129,7 @@ std::map<const Array*, std::pair<const Array*, uint64_t>> ArraySimplifyingSolver
     }
     uint64_t maxValue = maxExpr->getZExtValue();
 
-    uint64_t size = (maxValue - maxValue) + 1;
+    uint64_t size = (maxValue - minValue) + 1;
 
     klee_warning("Array %s is huge (size %d), trimmed it to range %lu-%lu (size %lu)", pair.first->name.c_str(), pair.first->size, minValue, maxValue, size);
 
@@ -138,42 +145,52 @@ std::map<const Array*, std::pair<const Array*, uint64_t>> ArraySimplifyingSolver
   }
 
   ArrayReadFixer fixer(replacements);
-  fixer.visit(query.expr);
+  auto newQueryExpr = fixer.visit(query.expr);
 
-  return replacements; // pass by val - ok, should be tiny anyway
+  std::vector<ref<Expr>>* newConstraints = new std::vector<ref<Expr>>();
+  for (auto constraint : query.constraints) {
+    auto newConstraint = fixer.visit(constraint);
+    newConstraints->push_back(newConstraint);
+  }
+
+  return {
+    .queryExpr = newQueryExpr,
+    .queryConstraints = *newConstraints,
+    .replacements = replacements
+  };
 }
 
 
 bool ArraySimplifyingSolver::computeValidity(const Query& query, Solver::Validity &result) {
-  fixQuery(query);
-  return solver->impl->computeValidity(query, result);
+  auto fix = fixQuery(query);
+  return solver->impl->computeValidity(Query(ConstraintManager(fix.queryConstraints), fix.queryExpr), result);
 }
 
 bool ArraySimplifyingSolver::computeTruth(const Query& query, bool &isValid) {
-  fixQuery(query);
-  return solver->impl->computeTruth(query, isValid);
+  auto fix = fixQuery(query);
+  return solver->impl->computeTruth(Query(ConstraintManager(fix.queryConstraints), fix.queryExpr), isValid);
 }
 
 bool ArraySimplifyingSolver::computeValue(const Query& query, ref<Expr> &result) {
-  fixQuery(query);
-  return solver->impl->computeValue(query, result);
+  auto fix = fixQuery(query);
+  return solver->impl->computeValue(Query(ConstraintManager(fix.queryConstraints), fix.queryExpr), result);
 }
 
 bool ArraySimplifyingSolver::computeInitialValues(const Query& query,
                                                   const std::vector<const Array*> &objects,
                                                   std::vector< std::vector<unsigned char> > &values,
                                                   bool &hasSolution) {
-  auto replacements = fixQuery(query);
+  auto fix = fixQuery(query);
   std::vector<const Array*> replacedObjects;
   for (auto obj : objects) {
-    if (replacements.count(obj) == 0) {
+    if (fix.replacements.count(obj) == 0) {
       replacedObjects.push_back(obj); // OK, as is
     } else {
-      replacedObjects.push_back(replacements[obj].first);
+      replacedObjects.push_back(fix.replacements[obj].first);
     }
   }
 
-  bool result = solver->impl->computeInitialValues(query, replacedObjects, values, hasSolution);
+  bool result = solver->impl->computeInitialValues(Query(ConstraintManager(fix.queryConstraints), fix.queryExpr), replacedObjects, values, hasSolution);
   if (!result) {
     return false;
   }
@@ -181,8 +198,8 @@ bool ArraySimplifyingSolver::computeInitialValues(const Query& query,
   if (hasSolution) {
     for (unsigned n = 0; n < values.size(); n++) {
       // If necessary, create a fake value with 0 everywhere it wasn't used...
-      if (replacements.count(objects[n]) == 1) {
-        uint64_t minValue = replacements[objects[n]].second;
+      if (fix.replacements.count(objects[n]) == 1) {
+        uint64_t minValue = fix.replacements[objects[n]].second;
         values[n].insert(/* pos */ values[n].begin(), /* count */ minValue, /* value */ 0);
         values[n].resize(/* size */ objects[n]->size, /* value */ 0);
       }
