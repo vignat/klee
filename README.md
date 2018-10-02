@@ -1,4 +1,12 @@
-This repo contains features neccesary for the VNDS project.
+# KLEE fork for the Vigor project
+
+Changes:
+- Add functionality to trace specific calls and dump all call paths/prefixes
+- Add loop-havocing functionality with automatic invariant inducing
+- Add memory-access restriction methods to allow/forbid code from accessing specific objects (so that their use as opaque pointers can be enforced)
+- Add array-trimming optimization to avoid passing enormous arrays to the solver if the query only needs a fraction of the array
+- Merge ISSTA'17 "Accelerating Array Constraints in Symbolic Execution" work from Perry, Mattavelli, Zhang and Cadar.
+
 
 KLEE Symbolic Virtual Machine
 =============================
