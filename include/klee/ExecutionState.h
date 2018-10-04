@@ -82,70 +82,21 @@ struct FunctionAlias {
   std::string alias;
 };
 
-struct FieldDescr {
-  Expr::Width width;
-  std::string type;
-  std::string name;
-  size_t addr;
-  bool doTraceValueIn;
-  bool doTraceValueOut;
-  ref<Expr> inVal;
-  ref<Expr> outVal;
-  std::map<int, FieldDescr> fields;
-
-  bool sameInvocationValue(const FieldDescr& other) const;
-  bool eq(const FieldDescr& other) const;
+struct CallValue {
+  ref<Expr> value;
+  std::vector<CallValue*> children;
 };
 
-struct CallArg {
-  ref<Expr> expr;
-  bool isPtr;
-  llvm::Function* funPtr;
-  std::string name;
-
-  FieldDescr pointee;
-
-  bool eq(const CallArg& other) const;
-  bool sameInvocationValue(const CallArg& other) const;
-};
-
-struct RetVal {
-  ref<Expr> expr;
-  bool isPtr;
-  llvm::Function* funPtr;
-
-  FieldDescr pointee;
-
-  bool eq(const RetVal& other) const;
-};
-
-struct CallExtraPtr {
-  size_t ptr;
-  FieldDescr pointee;
-  bool accessibleIn;
-  bool accessibleOut;
-
-  std::string name;
-
-  bool sameInvocationValue(const CallExtraPtr& other) const;
-  bool eq(const CallExtraPtr& other) const;
-};
-
-//TODO: Store assumptions increment as well. it is an important part of the call
-// these assumptions allow then to correctly match and distinguish call path prefixes.
 struct CallInfo {
-  llvm::Function* f;
-  std::vector<CallArg> args;
-  std::map<size_t, CallExtraPtr> extraPtrs;
-  RetVal ret;
-  bool returned;
-  std::vector< ref<Expr> > callContext;
-  std::vector< ref<Expr> > returnContext;
-  llvm::DebugLoc callPlace;
+  Function* function;
 
-  CallArg* getCallArgPtrp(ref<Expr> ptr);
-  bool eq(const CallInfo& other) const;
-  bool sameInvocation(const CallInfo* other) const;
+  // 0 is return value, rest are args
+  std::vector<CallValue> valuesBefore;
+  std::vector<CallValue> valuesAfter;
+
+  std::vector<ref<Expr>> callContext;
+  std::vector<ref<Expr>> returnContext;
+
   SymbolSet computeRetSymbolSet() const;
 };
 
@@ -373,41 +324,7 @@ public:
                    bool tracePointeeOut);
   void traceArgFunPtr(ref<Expr> arg,
                       std::string name);
-  void traceRet();
-  void traceRetPtr(Expr::Width width,
-                   bool tracePointee);
-  void traceArgPtrField(ref<Expr> arg, int offset,
-                        Expr::Width width, std::string name,
-                        bool doTraceValueIn,
-                        bool doTraceValueOut);
-  void traceArgPtrNestedField(ref<Expr> arg, int base_offset, int offset,
-                              Expr::Width width, std::string name,
-                              bool trace_in, bool trace_out);
-  void traceExtraPtr(size_t ptr, Expr::Width width,
-                     std::string name,
-                     std::string type,
-                     bool trace_in, bool trace_out);
-  void traceExtraPtrField(size_t ptr, int offset,
-                          Expr::Width width, std::string name,
-                          bool trace_in, bool trace_out);
-  void traceExtraPtrNestedField(size_t ptr,
-                                int base_offset,
-                                int offset,
-                                Expr::Width width,
-                                std::string name,
-                                bool trace_in, bool trace_out);
-  void traceExtraPtrNestedNestedField(size_t ptr,
-                                      int base_base_offset,
-                                      int base_offset,
-                                      int offset,
-                                      Expr::Width width,
-                                      std::string name,
-                                      bool trace_in, bool trace_out);
-  void traceRetPtrField(int offset, Expr::Width width, std::string name,
-                        bool doTraceValue);
-  void traceRetPtrNestedField(int base_offset, int offset,
-                              Expr::Width width, std::string name);
-
+  void trace();
   void recordRetConstraints(CallInfo *info) const;
 
   void dumpConstraints() const;

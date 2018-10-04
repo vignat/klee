@@ -251,10 +251,6 @@ public:
   void addCallPath(std::vector<CallInfo>::const_iterator path_begin,
                    std::vector<CallInfo>::const_iterator path_end,
                    unsigned path_id);
-  void dumpCallPrefixes(std::list<CallInfo> accumulated_prefix,
-                        std::list<const std::vector<ref<Expr> >* >
-                        accumulated_context,
-                        KleeHandler* fileOpener);
   void dumpCallPrefixesSExpr(std::list<CallInfo> accumulated_prefix,
                              KleeHandler* fileOpener);
 
@@ -634,109 +630,6 @@ void KleeHandler::processTestCase(const ExecutionState &state,
   }
 }
 
-bool dumpCallInfo(const CallInfo& ci, llvm::raw_ostream& file) {
-  file << ci.callPlace.getLine() <<":" <<ci.f->getName() <<"(";
-  assert(ci.returned);
-  for (std::vector< CallArg >::const_iterator argIter = ci.args.begin(),
-         end = ci.args.end(); argIter != end; ++argIter) {
-    const CallArg *arg = &*argIter;
-    file <<arg->name <<":";
-    file <<*arg->expr;
-    if (arg->isPtr) {
-      file <<"&";
-      if (arg->funPtr == NULL) {
-        if (arg->pointee.doTraceValueIn ||
-            arg->pointee.doTraceValueOut) {
-          file <<"[";
-          if (arg->pointee.doTraceValueIn) {
-            file <<*arg->pointee.inVal;
-          }
-          if (arg->pointee.doTraceValueOut &&
-              arg->pointee.outVal.isNull()) return false;
-          file <<"->";
-          if (arg->pointee.doTraceValueOut) {
-            file <<*arg->pointee.outVal <<"]"; // FIXME this is dubious, the delimiter is only written if doTraceValueOut?
-          }
-          std::map<int, FieldDescr>::const_iterator i =
-            arg->pointee.fields.begin(),
-            e = arg->pointee.fields.end();
-          for (; i != e; ++i) {
-            file <<"[" <<i->second.name <<":";
-            if (i->second.doTraceValueIn ||
-                i->second.doTraceValueOut) {
-              if (i->second.doTraceValueIn) {
-                file <<*i->second.inVal;
-              }
-              file << "->";
-              if (i->second.doTraceValueOut &&
-                  i->second.outVal.isNull()) return false;
-              if (i->second.doTraceValueOut) {
-                file <<*i->second.outVal;
-              }
-              file <<"]";
-            } else {
-              file <<"(...)]";
-            }
-          }
-        } else {
-          file <<"[...]";
-        }
-      } else {
-        file <<arg->funPtr->getName();
-      }
-    }
-    if (argIter+1 != end)
-      file <<",";
-  }
-  file <<") -> ";
-  if (ci.ret.expr.isNull()) {
-    file <<"[]";
-  } else {
-    file <<*ci.ret.expr;
-    if (ci.ret.isPtr) {
-      file <<"&";
-      if (ci.ret.funPtr == NULL) {
-        if (ci.ret.pointee.doTraceValueOut) {
-          file <<"[" <<*ci.ret.pointee.outVal <<"]";
-          std::map<int, FieldDescr>::const_iterator
-            i = ci.ret.pointee.fields.begin(),
-            e = ci.ret.pointee.fields.end();
-          for (; i != e; ++i) {
-            file <<"[" <<i->second.name <<":";
-            if (i->second.doTraceValueOut) {
-              file <<*i->second.outVal << "]";
-            } else {
-              file <<"(...)]";
-            }
-          }
-        } else {
-          file <<"[...]";
-        }
-      } else {
-        file <<ci.ret.funPtr->getName();
-      }
-    }
-  }
-  file <<"\n";
-  for (std::map<size_t, CallExtraPtr>::const_iterator i = ci.extraPtrs.begin(),
-         e = ci.extraPtrs.end(); i != e; ++i) {
-    const CallExtraPtr *extra_ptr = &(*i).second;
-    file <<"extra: " <<extra_ptr->name <<"&" <<extra_ptr->ptr <<" = &[";
-    if (extra_ptr->pointee.doTraceValueIn) {
-      file <<extra_ptr->pointee.inVal;
-    } else {
-      file <<"(...)";
-    }
-    if (extra_ptr->pointee.doTraceValueOut) {
-      file <<" -> " <<extra_ptr->pointee.outVal;
-    } else {
-      file <<"-> (...)";
-    }
-    file <<"]\n";
-  }
-  return true;
-}
-
 void dumpPointeeInSExpr(const FieldDescr& pointee,
                         llvm::raw_ostream& file);
 
@@ -853,95 +746,26 @@ void dumpRetSExpr(const RetVal& ret, llvm::raw_ostream& file) {
   }
 }
 
-bool dumpExtraPtrSExpr(const CallExtraPtr& cep, llvm::raw_ostream& file) {
-  file <<"\n((pname \"" <<cep.name <<"\")\n";
-  file <<"(value " <<cep.ptr <<")\n";
-  file <<"(ptee ";
-  if (cep.accessibleIn) {
-    if (cep.accessibleOut) {
-      file <<"(Changing (";
-      dumpPointeeInSExpr(cep.pointee, file);
-      file <<"\n";
-      dumpPointeeOutSExpr(cep.pointee, file);
-      file <<"))\n";
-    } else {
-      file <<"(Closing ";
-      dumpPointeeInSExpr(cep.pointee, file);
-      file <<")\n";
-    }
-  } else {
-    if (cep.accessibleOut) {
-      file <<"(Opening ";
-      dumpPointeeOutSExpr(cep.pointee, file);
-      file <<")\n";
-    } else {
-      llvm::errs() <<"The extra pointer must be accessible either at "
-                   <<"the beginning of a function, at its end or both.\n";
-      return false;
-    }
-  }
-  file <<"))\n";
-  return true;
-}
-
 bool dumpCallInfoSExpr(const CallInfo& ci, llvm::raw_ostream& file) {
   file <<"((fun_name \"" <<ci.f->getName() <<"\")\n (args (";
   assert(ci.returned);
-  for (std::vector< CallArg >::const_iterator argIter = ci.args.begin(),
-         end = ci.args.end(); argIter != end; ++argIter) {
+  for (auto argIter = ci.args.begin(), end = ci.args.end(); argIter != end; ++argIter) {
     const CallArg *arg = &*argIter;
     if (!dumpCallArgSExpr(arg, file)) return false;
   }
   file <<"))\n";
-  file <<"(extra_ptrs (";
-  std::map<size_t, CallExtraPtr>::const_iterator i = ci.extraPtrs.begin(),
-    e = ci.extraPtrs.end();
-  for (; i != e; ++i) {
-    dumpExtraPtrSExpr(i->second, file);
-  }
-  file <<"))\n";
   dumpRetSExpr(ci.ret, file);
   file <<"(call_context (";
-  for (std::vector<ref<Expr> >::const_iterator cci = ci.callContext.begin(),
-         cce = ci.callContext.end(); cci != cce; ++cci) {
+  for (auto cci = ci.callContext.begin(), cce = ci.callContext.end(); cci != cce; ++cci) {
     file <<"\n" <<**cci;
   }
   file <<"))\n";
   file <<"(ret_context (";
-  for (std::vector<ref<Expr> >::const_iterator rci = ci.returnContext.begin(),
-         rce = ci.returnContext.end(); rci != rce; ++rci) {
+  for (auto rci = ci.returnContext.begin(), rce = ci.returnContext.end(); rci != rce; ++rci) {
     file <<"\n" <<**rci;
   }
   file <<")))\n";
   return true;
-}
-
-void KleeHandler::processCallPath(const ExecutionState &state) {
-  unsigned id = m_callPathIndex;
-  if (DumpCallTracePrefixes)
-    m_callTree.addCallPath(state.callPath.begin(),
-                           state.callPath.end(),
-                           id);
-
-  if (!DumpCallTraces) return;
-
-  ++m_callPathIndex;
-
-  std::stringstream filename;
-  filename << "call-path" << std::setfill('0') << std::setw(6) << id << '.' << "txt";
-  llvm::raw_ostream *file = openOutputFile(filename.str());
-  for (std::vector<CallInfo>::const_iterator iter = state.callPath.begin(),
-         end = state.callPath.end(); iter != end; ++iter) {
-    const CallInfo& ci = *iter;
-    bool dumped = dumpCallInfo(ci, *file);
-    if (!dumped) break;
-  }
-  *file <<";;-- Constraints --\n";
-  for (ConstraintManager::constraint_iterator ci = state.constraints.begin(),
-         cEnd = state.constraints.end(); ci != cEnd; ++ci) {
-    *file <<**ci<<"\n";
-  }
-  delete file;
 }
 
 llvm::raw_fd_ostream *KleeHandler::openNextCallPathPrefixFile() {
@@ -953,50 +777,7 @@ llvm::raw_fd_ostream *KleeHandler::openNextCallPathPrefixFile() {
 
 void KleeHandler::dumpCallPathPrefixes() {
   m_callTree.dumpCallPrefixesSExpr(std::list<CallInfo>(), this);
-  //m_callTree.dumpCallPrefixes(std::list<CallInfo>(), std::list<const std::vector<ref<Expr> >* >(), this);
 }
-
-void KleeHandler::dumpCallPath(const ExecutionState &state, llvm::raw_ostream *file) {
-  std::vector<klee::ref<klee::Expr> > evalExprs;
-  std::vector<const klee::Array *> evalArrays;
-
-  for (auto ci : state.callPath) {
-    for (auto e : ci.extraPtrs) {
-      if (e.second.pointee.doTraceValueIn) {
-        evalExprs.push_back(e.second.pointee.inVal);
-      }
-      if (e.second.pointee.doTraceValueOut) {
-        evalExprs.push_back(e.second.pointee.outVal);
-      }
-    }
-  }
-
-  ExprBuilder *exprBuilder = createDefaultExprBuilder();
-  std::string kleaverStr;
-  llvm::raw_string_ostream kleaverROS(kleaverStr);
-  ExprPPrinter::printQuery(kleaverROS, state.constraints, exprBuilder->False(),
-                           &evalExprs[0], &evalExprs[0] + evalExprs.size(),
-                           &evalArrays[0], &evalArrays[0] + evalArrays.size(),
-                           true);
-  kleaverROS.flush();
-
-  *file <<";;-- kQuery --\n";
-  *file << kleaverROS.str();
-
-  *file <<";;-- Calls --\n";
-  for (std::vector<CallInfo>::const_iterator iter = state.callPath.begin(),
-         end = state.callPath.end(); iter != end; ++iter) {
-    const CallInfo& ci = *iter;
-    bool dumped = dumpCallInfo(ci, *file);
-    if (!dumped) break;
-  }
-  *file <<";;-- Constraints --\n";
-  for (ConstraintManager::constraint_iterator ci = state.constraints.begin(),
-         cEnd = state.constraints.end(); ci != cEnd; ++ci) {
-    *file <<**ci<<"\n";
-  }
-}
-
 
   // load a .path file
 void KleeHandler::loadPathFile(std::string name,
@@ -1121,179 +902,6 @@ std::vector<std::vector<CallPathTip*> > CallTree::groupChildren() {
   return ret;
 }
 
-void dumpCallGroup(const std::vector<CallInfo*> group, llvm::raw_ostream& file) {
-  std::vector<CallInfo*>::const_iterator gi = group.begin(), ge = group.end();
-  file << (**gi).f->getName() <<"(";
-  for (unsigned argI = 0; argI < (**gi).args.size(); ++argI) {
-    const CallArg& arg = (**gi).args[argI];
-    file <<arg.name <<":";
-    file <<*arg.expr;
-    if (arg.isPtr) {
-      file <<"&";
-      if (arg.funPtr != NULL) {
-        file <<arg.funPtr->getName();
-      } else {
-        file << "[";
-        if (arg.pointee.doTraceValueIn) {
-           file << arg.pointee.inVal;
-        }
-        file << "->";
-        for (; gi != ge; ++gi) {
-          file <<*(**gi).args[argI].pointee.outVal <<"; ";
-        }
-        file <<"]";
-        gi = group.begin();
-        unsigned numFields = arg.pointee.fields.size();
-        for (; gi != ge; ++gi) {
-          assert((**gi).args[argI].pointee.fields.size() == numFields &&
-                 "Do not support variating the argument structure for different"
-                 " calls of the same function.");
-        }
-        gi = group.begin();
-        std::map<int, FieldDescr>::const_iterator
-          fi = arg.pointee.fields.begin(),
-          fe = arg.pointee.fields.end();
-        for (; fi != fe; ++fi) {
-          int fieldOffset = fi->first;
-          const FieldDescr& descr = fi->second;
-          file <<"[";
-          if (descr.doTraceValueIn) {
-            file <<descr.name <<":" <<*descr.inVal;
-          }
-          file << "->";
-          for (; gi != ge; ++gi) {
-            std::map<int, FieldDescr>::const_iterator otherDescrI =
-              (**gi).args[argI].pointee.fields.find(fieldOffset);
-            assert(otherDescrI != (**gi).args[argI].pointee.fields.end() &&
-                   "The argument structure is different.");
-            file <<*otherDescrI->second.outVal <<";";
-          }
-          file <<"]";
-          gi = group.begin();
-        }
-      }
-    }
-  }
-  file <<") ->";
-  const RetVal& ret = (**gi).ret;
-  if (ret.expr.isNull()) {
-    for (; gi != ge; ++gi) {
-      assert((**gi).ret.expr.isNull() &&
-             "Do not support different return"
-             " behaviours for the same function.");
-    }
-    gi = group.begin();
-    file <<"[]";
-  } else {
-    if (ret.isPtr) {
-      for (; gi != ge; ++gi) {
-        assert((**gi).ret.isPtr &&
-               "Do not support different return"
-               " behaviours for the same function.");
-      }
-      gi = group.begin();
-      file <<"&";
-      if (ret.funPtr != NULL) {
-        for (; gi != ge; ++gi) {
-          assert((**gi).ret.funPtr != NULL &&
-                 "Do not support different return"
-                 " behaviours for the same function.");
-          file <<(**gi).ret.funPtr->getName() <<";";
-        }
-        gi = group.begin();
-      } else {
-        for (; gi != ge; ++gi) {
-          file <<*(**gi).ret.pointee.outVal <<";";
-        }
-        gi = group.begin();
-        std::map<int, FieldDescr>::const_iterator
-          fi = ret.pointee.fields.begin(),
-          fe = ret.pointee.fields.end();
-        for (; fi != fe; ++fi) {
-          int fieldOffset = fi->first;
-          const FieldDescr& descr = fi->second;
-          file <<"[" <<descr.name <<":";
-          for (; gi != ge; ++gi) {
-            std::map<int, FieldDescr>::const_iterator otherDescrI =
-              (**gi).ret.pointee.fields.find(fieldOffset);
-            assert(otherDescrI != (**gi).ret.pointee.fields.end() &&
-                   "The return structure is different.");
-            file <<*otherDescrI->second.outVal <<";";
-          }
-          file <<"]";
-          gi = group.begin();
-        }
-      }
-    } else {
-      for (; gi != ge; ++gi) {
-        file <<(**gi).ret.expr <<";";
-      }
-    }
-  }
-  file <<"\n";
-}
-
-void CallTree::dumpCallPrefixes(std::list<CallInfo> accumulated_prefix,
-                                std::list<const std::vector<ref<Expr> >* >
-                                accumulated_context,
-                                KleeHandler* fileOpener) {
-  std::vector<std::vector<CallPathTip*> > tipCalls = groupChildren();
-  std::vector<std::vector<CallPathTip*> >::iterator ti = tipCalls.begin(),
-    te = tipCalls.end();
-  for (; ti != te; ++ti) {
-    llvm::raw_ostream* file = fileOpener->openNextCallPathPrefixFile();
-    std::list<CallInfo>::iterator ai = accumulated_prefix.begin(),
-      ae = accumulated_prefix.end();
-    for (; ai != ae; ++ai) {
-      bool dumped = dumpCallInfo(*ai, *file);
-      assert(dumped);
-    }
-    *file <<"--- Constraints ---\n";
-    for (std::list<const std::vector<ref<Expr> >* >::const_iterator
-           cgi = accumulated_context.begin(),
-           cge = accumulated_context.end(); cgi != cge; ++cgi) {
-      for (std::vector<ref<Expr> >::const_iterator ci = (**cgi).begin(),
-             ce = (**cgi).end(); ci != ce; ++ci) {
-        *file <<**ci<<"\n";
-      }
-      *file<<"---\n";
-    }
-    *file <<"--- Alternatives ---\n";
-    //FIXME: currently there can not be more than one alternative.
-    *file <<"(or \n";
-    for (std::vector<CallPathTip*>::const_iterator chi = ti->begin(),
-           che = ti->end(); chi != che; ++chi) {
-      *file <<"(and \n";
-      bool dumped = dumpCallInfo((**chi).call, *file);
-      assert(dumped);
-      for (std::vector<ref<Expr> >::const_iterator ei =
-             (**chi).call.callContext.begin(),
-             ee = (**chi).call.callContext.end(); ei != ee; ++ei) {
-        *file <<**ei<<"\n";
-      }
-      for (std::vector<ref<Expr> >::const_iterator ei =
-             (**chi).call.returnContext.begin(),
-             ee = (**chi).call.returnContext.end(); ei != ee; ++ei) {
-        *file <<**ei<<"\n";
-      }
-      *file <<"true)\n";
-    }
-    *file <<"false)\n";
-    delete file;
-  }
-  std::vector< CallTree* >::iterator ci = children.begin(),
-    ce = children.end();
-  for (; ci != ce; ++ci) {
-    accumulated_prefix.push_back(( *ci )->tip.call);
-    accumulated_context.push_back(&(*ci)->tip.call.callContext);
-    accumulated_context.push_back(&(*ci)->tip.call.returnContext);
-    ( *ci )->dumpCallPrefixes(accumulated_prefix, accumulated_context, fileOpener);
-    accumulated_context.pop_back();
-    accumulated_context.pop_back();
-    accumulated_prefix.pop_back();
-  }
-}
-
 void CallTree::dumpCallPrefixesSExpr(std::list<CallInfo> accumulated_prefix,
                                      KleeHandler* fileOpener) {
   std::vector<std::vector<CallPathTip*> > tipCalls = groupChildren();
@@ -1301,18 +909,15 @@ void CallTree::dumpCallPrefixesSExpr(std::list<CallInfo> accumulated_prefix,
     te = tipCalls.end();
   for (; ti != te; ++ti) {
     llvm::raw_ostream* file = fileOpener->openNextCallPathPrefixFile();
-    std::list<CallInfo>::iterator ai = accumulated_prefix.begin(),
-      ae = accumulated_prefix.end();
     *file <<"((history (\n";
-    for (; ai != ae; ++ai) {
+    for (auto ai = accumulated_prefix.begin(), ae = accumulated_prefix.end(); ai != ae; ++ai) {
       bool dumped = dumpCallInfoSExpr(*ai, *file);
       assert(dumped);
     }
     *file <<"))\n";
-    //FIXME: currently there can not be more than one alternative.
+
     *file <<"(tip_calls (\n";
-    for (std::vector<CallPathTip*>::const_iterator chi = ti->begin(),
-           che = ti->end(); chi != che; ++chi) {
+    for (auto chi = ti->begin(), che = ti->end(); chi != che; ++chi) {
       *file <<"; id: " <<(**chi).path_id <<"(" <<(**chi).call.callPlace.getLine() <<")\n";
       bool dumped = dumpCallInfoSExpr((**chi).call, *file);
       assert(dumped);
@@ -2180,12 +1785,11 @@ int main(int argc, char **argv, char **envp) {
       }
     }
     interpreter->runFunctionAsMain(mainFn, pArgc, pArgv, pEnvp);
-    handler->getInfoStream()
-      << "KLEE: saving call prefixes \n";
 
-    if (DumpCallTracePrefixes)
+    if (DumpCallTracePrefixes) {
+      handler->getInfoStream() << "KLEE: saving call prefixes \n";
       handler->dumpCallPathPrefixes();
-
+    }
 
     while (!seeds.empty()) {
       kTest_free(seeds.back());
