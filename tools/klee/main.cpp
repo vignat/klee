@@ -690,10 +690,11 @@ void dumpCallValuePair(const CallValue* before, const CallValue* after, llvm::ra
 
   file << "(ptr ";
   if (after->type->isPointerType()) {
-    if (before->pointee.isNull() && after->pointee.isNull()) {
+    if (before != nullptr && before->pointee.isNull() && after->pointee.isNull()) {
       file << "Apathptr";
-    } else if (??? IS FUNCTION PTR ???) {
-      file << "(Funptr \"" << ??? NAME ??? << "\")";
+    } else if (before != nullptr && dynamic_cast<PointerType>(before->type)->getElementType()->isFunctionType()) {
+      Function* func = (Function*) dynamic_cast<ConstantExpr>(before->expr)->getZExtValue();
+      file << "(Funptr \"" << func->getName() << "\")";
     } else {
     file << "(Curioptr\n";
 

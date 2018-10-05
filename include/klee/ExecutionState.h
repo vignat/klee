@@ -106,7 +106,7 @@ struct CallValue {
   // Set for values that are not arguments
   ref<Expr> address;
 
-  // Exclusive (if struct or pointer respectively)
+  // Exclusive (if struct or non-function pointer respectively)
   std::vector<CallValue*> children;
   CallValue* pointee;
 
