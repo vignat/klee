@@ -90,7 +90,6 @@ ExecutionState::ExecutionState(KFunction *kf) :
     ptreeNode(0),
     steppedInstructions(0),
     relevantSymbols(),
-    doTrace(true),
     condoneUndeclaredHavocs(false) {
   pushFrame(0, kf);
 }
@@ -100,7 +99,6 @@ ExecutionState::ExecutionState(const std::vector<ref<Expr> > &assumptions)
     constraints(assumptions),
     queryCost(0.), ptreeNode(0),
     relevantSymbols(),
-    doTrace(true),
     condoneUndeclaredHavocs(false) {}
 
 ExecutionState::~ExecutionState() {
@@ -166,7 +164,6 @@ ExecutionState::ExecutionState(const ExecutionState& state):
     steppedInstructions(state.steppedInstructions),
     callPath(state.callPath),
     relevantSymbols(state.relevantSymbols),
-    doTrace(state.doTrace),
     condoneUndeclaredHavocs(state.condoneUndeclaredHavocs)
 {
   for (unsigned int i=0; i<symbolics.size(); i++)
@@ -569,25 +566,18 @@ ref<Expr> ExecutionState::readMemoryChunk(ref<Expr> addr,
 }
 
 void ExecutionState::trace() {
-  if (!callPath.empty()) {
-    SymbolSet symbols = callPath.back().computeRetSymbolSet();
-    relevantSymbols.insert(symbols.begin(), symbols.end());
-  }
-  callPath.push_back(CallInfo());
-  callPath.back().callPlace = stack.back().caller->inst->getDebugLoc();
-  callPath.back().f = stack.back().kf->function;
-  callPath.back().returned = false;
-  std::vector<ref<Expr> > constrs =
-    relevantConstraints(relevantSymbols);
-  callPath.back().callContext.insert(callPath.back().callContext.end(),
-                                     constrs.begin(), constrs.end());
+  CallInfo info;
+  info.function = stack.back().kf;
+  info.fillValuesBefore(this);
+
+  callPath.push_back(info);
 }
 
 void ExecutionState::recordRetConstraints(CallInfo *info) const {
   assert(!callPath.empty() &&
          info->function == stack.back().kf->function);
 
-  SymbolSet symbols = info->computeRetSymbolSet();
+  SymbolSet symbols = info->getSymbols();
   std::vector<ref<Expr> > constrs = relevantConstraints(symbols);
   info->returnContext.insert(info->returnContext.end(),
                              constrs.begin(), constrs.end());
@@ -784,134 +774,123 @@ void ExecutionState::induceInvariantsForThisLoop(KInstruction *target) {
     ConstantExpr::create(0xffffffff, Expr::Int32);
 }
 
-bool FieldDescr::eq(const FieldDescr& other) const {
-  bool self_eq =
-    width == other.width &&
-    name == other.name &&
-    type == other.type &&
-    doTraceValueIn == other.doTraceValueIn &&
-    doTraceValueOut == other.doTraceValueOut &&
-    (!doTraceValueIn ||
-     (inVal.isNull() ? other.inVal.isNull() :
-       (!other.inVal.isNull()) && 0 == inVal->compare(*other.inVal))) &&
-    (!doTraceValueOut ||
-     (outVal.isNull() ? other.outVal.isNull() :
-      (!other.outVal.isNull()) && 0 == outVal->compare(*other.outVal)));
-  if (!self_eq) return false;
-
-  if (!doTraceValueIn &&
-      !doTraceValueOut) {
-    return true;
+void CallValue::fill(const ExecutionState& state, const DataLayout* layout) {
+  if (expr == NULL) {
+    // If expr isn't set, address must be
+    expr = state.readMemoryChunk(address, layout->getTypeAllocSizeInBits(type), true);
   }
 
-  std::map<int, FieldDescr>::const_iterator i = fields.begin(),
-    e = fields.end();
-  for (; i != e; ++i) {
-    std::map<int, FieldDescr>::const_iterator it = other.fields.find(i->first);
-    if (it == other.fields.end() || !it->second.eq(i->second)) return false;
-  }
-  return true;
-}
+  if (type->isStructTy()) {
+    // Note that this case cannot happen for a parameter, so we know we have an address
 
-bool FieldDescr::sameInvocationValue(const FieldDescr& other) const {
-  bool self_same =
-    width == other.width &&
-    name == other.name &&
-    type == other.type &&
-    doTraceValueIn == other.doTraceValueIn &&
-    (!doTraceValueIn ||
-     (inVal.isNull() ? other.inVal.isNull() :
-      (!other.inVal.isNull()) && 0 == inVal->compare(*other.inVal)));
-  if (!self_same) return false;
-  if (!doTraceValueIn) return true;
-  std::map<int, FieldDescr>::const_iterator i = fields.begin(),
-    e = fields.end();
-  for (; i != e; ++i) {
-    std::map<int, FieldDescr>::const_iterator it = other.fields.find(i->first);
-    if (it == other.fields.end() ||
-        !it->second.sameInvocationValue(i->second)) return false;
-  }
-  return true;
-}
+    StructType* structTy = dynamic_cast<StructType*>(type);
+    const StructLayout* structLayout = layout->getStructLayout(structTy);
 
-bool CallArg::eq(const CallArg& other) const {
-  if (expr.isNull()) {
-    if (!other.expr.isNull()) return false;
+    for (int n = 0; n < structTy->elements().size(); ++n) {
+      uint64_t offset = structLayout->getElementOffsetInBits(n);
+
+      CallValue* val = new CallValue();
+      val->type = structTy->elements()[n];
+      val->address = AddExpr::create(address, ConstantExpr::create(offset));
+      val->fill(state, layout);
+
+      children.push_back(val);
+    }
+  } else if(type->isPointerTy()) {
+    // We may not have an address here since it could be a param, but we don't need it
+
+    // First, is it symbolic? We can't trace that.
+    if (!isa<ConstantExpr>(expr)) {
+      return;
+    }
+
+    // Then check for null
+    if (dynamic_cast<ConstantExpr>(expr)->getZExtValue() == 0) {
+      return;
+    }
+
+    PointerType* pointerTy = dynamic_cast<PointerType*>(type);
+
+    // We also don't follow function pointers
+    if (pointerTy->getElementType()->isFunctionType()) {
+      return;
+    }
+
+    pointee = new CallValue();
+    pointee->type = pointerTy->getElementType();
+    pointee->address = expr;
+    pointee->fill(state, layout);
+  } else if(type->isIntegerTy()) {
+    // Nothing to do here, expr must be set by this point
   } else {
-    if (other.expr.isNull()) return false;
-    if (0 != expr->compare(*other.expr)) return false;
+    klee_error("Trying to trace a type that is not integer, pointer or struct.");
   }
-  if (isPtr) {
-    if (!other.isPtr) return false;
-    if (!pointee.eq(other.pointee)) return false;
-  } else {
-    if (other.isPtr) return false;
-  }
-  return true;
 }
 
-// Essentially same as eq, but doe not compare the output states.
-bool CallArg::sameInvocationValue(const CallArg& other) const {
-  if (expr.isNull()) {
-    if (!other.expr.isNull()) return false;
-  } else {
-    if (other.expr.isNull()) return false;
-    if (0 != expr->compare(*other.expr)) return false;
-  }
-  if (isPtr) {
-    if (!other.isPtr) return false;
-    if (!pointee.sameInvocationValue(other.pointee)) return false;
-  } else {
-    if (other.isPtr) return false;
-  }
-  return true;
+ref<Expr> getArgExpr(const ExecutionState& state, KFunction* function, int index) {
+  // HACK copy paste of what's in Executor because it'd be stupid to depend on it
+  return state.stack.back().locals[function->getArgRegister(index)].value;
 }
 
-bool RetVal::eq(const RetVal& other) const {
-  if (expr.isNull()) {
-    if (!other.expr.isNull()) return false;
-  } else {
-    if (other.expr.isNull()) return false;
-    if (0 != expr->compare(*other.expr)) return false;
+void CallInfo::fillValuesBefore(const ExecutionState& state) {
+  if (!state.callPath.empty()) {
+    auto symbols = state.callPath.back().getSymbols();
+    relevantSymbols.insert(symbols.begin(), symbols.end());
   }
-  if (isPtr) {
-    if (!other.isPtr) return false;
-    if (!pointee.eq(other.pointee)) return false;
-  } else {
-    if (other.isPtr) return false;
+
+  auto constraints = relevantConstraints(relevantSymbols);
+  callContext.insert(callContext.end(), constraints.begin(), constraints.end());
+
+  for (int n = 0; n < function->numArgs; ++n) {
+    CallValue* val = new CallValue();
+    val->type = function->function->arguments()[n]->getType();
+    val->expr = getArgExpr(state, function, n);
+    val->fill(state, function->module->targetData);
+
+    argumentsBefore.push_back(val);
   }
-  return true;
 }
 
-bool CallExtraPtr::eq(const CallExtraPtr& other) const {
-  if (ptr != other.ptr) return false;
-  if (accessibleIn != other.accessibleIn) return false;
-  if (accessibleOut != other.accessibleOut) return false;
-  if (!pointee.eq(other.pointee)) return false;
-  if (name != other.name) return false;
-  return true;
-}
+void CallInfo::fillValuesAfter(const ExecutionState& state, ref<Expr> result) {
+  auto symbols = getSymbols();
+  auto constraints = relevantConstraints(symbols);
+  returnContext.insert(returnContext.end(), constraints.begin(), constraints.end());
 
-// Essentially same as eq, but doe not compare the output states.
-bool CallExtraPtr::sameInvocationValue(const CallExtraPtr& other) const {
-  if (ptr != other.ptr) return false;
-  if (accessibleIn != other.accessibleIn) return false;
-  if (!pointee.sameInvocationValue(other.pointee)) return false;
-  if (name != other.name) return false;
-  return true;
-}
+  returnValue = new CallValue();
+  returnValue->type = function->function->getReturnType();
+  returnValue->expr = result;
+  returnValue->fill(state, function->module->targetData);
 
-CallArg* CallInfo::getCallArgPtrp(ref<Expr> ptr) {
-  for (unsigned i = 0; i < args.size(); ++i) {
-    CallArg *cur = &args[i];
-    if (cur->isPtr && 0 == cur->expr->compare(*ptr)) return cur;
+  for (int n = 0; n < function->numArgs; ++n) {
+    CallValue* val = new CallValue();
+    val->type = function->function->arguments()[n]->getType();
+    val->expr = getArgExpr(state, function, n);
+    val->fill(state, function->module->targetData);
+
+    argumentsAfter.push_back(val);
   }
-  return 0;
+}
+
+bool exprsEqual(ref<Expr> a, ref<Expr> b) {
+  return a.isNull() ? b.isNull() : (!b.isNull() && a == b));
+}
+
+bool CallValue::equals(const CallValue& other) const {
+  if (!exprsEqual(value, other.value)) return false;
+  if (!exprsEqual(pointee, other.pointee)) return false;
+  if (pointeeChildren.size() != other.pointeeChildren.size()) return false;
+
+  for (int n = 0; n < pointeeChildren.size(); ++n) {
+    if (!exprsEqual(pointeeChildren[n], other.pointeeChildren[n])) return false;
+  }
+
+  return true;
 }
 
 bool equalContexts(const std::vector<ref<Expr> >& a,
                    const std::vector<ref<Expr> >& b) {
   // TODO: Structural-only comparison here, ideally we'd ask the solver about it
+  // FIXME: quadratic! ouch!
   if (a.size() != b.size()) return false;
   for (unsigned i = 0; i < a.size(); ++i) {
     bool notFound = true;
@@ -936,70 +915,54 @@ bool equalContexts(const std::vector<ref<Expr> >& a,
   return true;
 }
 
-bool CallInfo::eq(const CallInfo& other) const {
-  if (args.size() != other.args.size()) return false;
-  if (extraPtrs.size() != other.extraPtrs.size()) return false;
-  for (unsigned i = 0; i < args.size(); ++i) {
-    if (!args[i].eq(other.args[i])) return false;
+bool CallInfo::equals(const CallInfo& other, bool compareOutputs) const {
+  if (argsBefore.size() != other.argsBefore.size()) return false;
+  for (unsigned i = 0; i < argsBefore.size(); ++i) {
+    if (!argsBefore[i].equals(other.argsBefore[i])) return false;
   }
-  std::map<size_t, CallExtraPtr>::const_iterator i = extraPtrs.begin(),
-    e = extraPtrs.end();
-  for (; i != e; ++i) {
-    std::map<size_t, CallExtraPtr>::const_iterator it =
-      other.extraPtrs.find(i->first);
-    if (it == other.extraPtrs.end() ||
-        !it->second.eq(i->second)) return false;
-  }
-  return f == other.f &&
-    ret.eq(other.ret) &&
-    equalContexts(callContext, other.callContext) &&
-    equalContexts(returnContext, other.returnContext) &&
-    returned == other.returned;
-}
 
-bool CallInfo::sameInvocation(const CallInfo* other) const {
-  //TODO: compare assumptions as well.
-  if (args.size() != other->args.size()) return false;
-  // HACK: Not comparing extra ptrs for now, since depending on result value an extra ptr may exist or not
-  //if (extraPtrs.size() != other->extraPtrs.size()) return false;
-  if (f != other->f) return false;
-  for (unsigned i = 0; i < args.size(); ++i) {
-    if (!args[i].sameInvocationValue(other->args[i])) return false;
-  }
-  /*std::map<size_t, CallExtraPtr>::const_iterator i = extraPtrs.begin(),
-    e = extraPtrs.end();
-  for (; i != e; ++i) {
-    std::map<size_t, CallExtraPtr>::const_iterator it =
-      other->extraPtrs.find(i->first);
-    if (it == other->extraPtrs.end() ||
-        !it->second.sameInvocationValue(i->second)) return false;
-  }*/
-  return equalContexts(callContext, other->callContext);
-}
-
-SymbolSet CallInfo::computeRetSymbolSet() const {
-  assert(returned && "incomplete");
-  SymbolSet symbols;
-  if (!ret.expr.isNull()) {
-    symbols = GetExprSymbols::visit(ret.expr);
-  }
-  if (ret.isPtr && ret.funPtr == NULL && ret.pointee.doTraceValueOut) {
-    SymbolSet ptrSymbols = GetExprSymbols::visit(ret.pointee.outVal);
-    symbols.insert(ptrSymbols.begin(), ptrSymbols.end());
-  }
-  for (unsigned i = 0; i < args.size(); ++i) {
-    if (args[i].isPtr && args[i].funPtr == NULL &&
-        args[i].pointee.doTraceValueOut) {
-      SymbolSet argSymbols = GetExprSymbols::visit(args[i].pointee.outVal);
-      symbols.insert(argSymbols.begin(), argSymbols.end());
+  if(compareOutputs) {
+    if (argsAfter.size() != other.argsAfter.size()) return false;
+    for (unsigned i = 0; i < argsAfter.size(); ++i) {
+      if (!argsAfter[i].equals(other.argsAfter[i])) return false;
     }
   }
-  for (std::map<size_t, CallExtraPtr>::const_iterator i = extraPtrs.begin(),
-         e = extraPtrs.end(); i != e; ++i) {
-    if (!i->second.pointee.doTraceValueOut) continue;
-    SymbolSet indirectSymbols = GetExprSymbols::visit(i->second.pointee.outVal);
-    symbols.insert(indirectSymbols.begin(), indirectSymbols.end());
+
+  return function == other.function &&
+         equalContexts(callContext, other.callContext) &&
+         (!compareOutputs || (returnValue.equals(other.returnValue) &&
+                              equalContexts(returnContext, other.returnContext)));
+}
+
+SymbolSet CallValue::getSymbols() const {
+  SymbolSet symbols = GetExprSymbols::visit(expr);
+
+  if (pointee != nullptr) {
+    auto pointeeSymbols = pointee->getSymbols();
+    symbols.insert(pointeeSymbols.begin(), pointeeSymbols.end());
   }
+
+  for (auto val : children) {
+    auto valSymbols = val->getSymbols();
+    symbols.insert(valSymbols.begin(), valSymbols.end());
+  }
+
+  return symbols;
+}
+
+SymbolSet CallInfo::getSymbols() const {
+  SymbolSet symbols;
+
+  if (!returnValue->expr.isNull()) {
+    auto retSymbols = returnValue->getSymbols();
+    symbols.insert(retSymbols.begin(), retSymbols.end());
+  }
+
+  for (auto val : argsAfter) {
+    auto valSymbols = val->getSymbols();
+    symbols.insert(valSymbols.begin(), valSymbols.end());
+  }
+
   return symbols;
 }
 

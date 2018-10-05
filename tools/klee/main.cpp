@@ -166,17 +166,9 @@ namespace {
             cl::init(""));
 
   cl::opt<bool>
-  DumpCallTracePrefixes("dump-call-trace-prefixes",
-                        cl::desc("Compute and dump all the prefixes for the call "
-                                 "traces, generated according to klee_trace_*."),
-                        cl::init(false));
-
-  cl::opt<bool>
-  DumpCallTraces("dump-call-traces",
-                 cl::desc("Dump call traces into separate file each. The call "
-                          "traces consist of function invocations with the "
-                          "klee_trace_ret* intrinsic labels."),
-                 cl::init(false));
+  DumpTraces("dump-traces",
+             cl::desc("Dump call traces. The call traces consist of functions that invoked klee_trace()."),
+             cl::init(false));
 
   cl::opt<bool>
   CondoneUndeclaredHavocs("condone-undeclared-havocs",
@@ -251,8 +243,8 @@ public:
   void addCallPath(std::vector<CallInfo>::const_iterator path_begin,
                    std::vector<CallInfo>::const_iterator path_end,
                    unsigned path_id);
-  void dumpCallPrefixesSExpr(std::list<CallInfo> accumulated_prefix,
-                             KleeHandler* fileOpener);
+  void dumpTraces(std::list<CallInfo> accumulated_prefix,
+                  KleeHandler* fileOpener);
 
   int refCount;
 };
@@ -270,8 +262,7 @@ private:
   unsigned m_numTotalTests;     // Number of tests received from the interpreter
   unsigned m_numGeneratedTests; // Number of tests successfully generated
   unsigned m_pathsExplored; // number of paths explored so far
-  unsigned m_callPathIndex; // number of call path strings dumped so far
-  unsigned m_callPathPrefixIndex; // number of call path strings dumped so far
+  unsigned m_traceIndex; // number of call path strings dumped so far
 
   // used for writing .ktest files
   int m_argc;
@@ -311,8 +302,7 @@ public:
   static std::string getRunTimeLibraryPath(const char *argv0);
   llvm::raw_fd_ostream  *openNextCallPathPrefixFile();
 
-  void dumpCallPathPrefixes();
-  void dumpCallPath(const ExecutionState &state, llvm::raw_ostream *file);
+  void dumpTraces();
 };
 
 KleeHandler::KleeHandler(int argc, char **argv)
@@ -528,13 +518,6 @@ void KleeHandler::processTestCase(const ExecutionState &state,
         ++m_numGeneratedTests;
       }
 
-      if (DumpCallTraces && !errorMessage) {
-        llvm::raw_fd_ostream *trace_file =
-          openOutputFile(getTestFilename("call_path", id));
-        dumpCallPath(state, trace_file);
-        delete trace_file;
-      }
-
       for (unsigned i=0; i<b.numObjects; i++)
         delete[] b.objects[i].bytes;
       delete[] b.objects;
@@ -692,91 +675,87 @@ void dumpPointeeOutSExpr(const FieldDescr& pointee,
   file <<")";
 }
 
-bool dumpCallArgSExpr(const CallArg *arg, llvm::raw_ostream& file) {
-  file <<"\n((aname \"" <<arg->name <<"\")\n";
-  file <<"(value " <<*arg->expr <<")\n";
-  file <<"(ptr ";
-  if (arg->isPtr) {
-    if (arg->funPtr == NULL) {
-      if (arg->pointee.doTraceValueIn ||
-          arg->pointee.doTraceValueOut) {
-        file <<"(Curioptr\n";
-        file <<"((before ";
-        dumpPointeeInSExpr(arg->pointee, file);
-        file <<")\n";
-        file <<"(after ";
-        dumpPointeeOutSExpr(arg->pointee, file);
-        file <<")))\n";
-      } else {
-        file <<"Apathptr";
-      }
-    } else {
-      file <<"(Funptr \"" <<arg->funPtr->getName() <<"\")";
-    }
-  } else {
-    file <<"Nonptr";
-  }
-  file <<"))";
-  return true;
+void dumpCallValue(const CallValue* val, llvm::raw_ostream& file) {
+
 }
 
-void dumpRetSExpr(const RetVal& ret, llvm::raw_ostream& file) {
-  if (ret.expr.isNull()) {
-    file <<"(ret ())";
+void dumpCallValuePair(const CallValue* before, const CallValue* after, llvm::raw_ostream& file) {
+  // Note that after always exists but before may not (for the return value)
+
+  if (before == nullptr) {
+    file << "(value " << after->expr << ")\n";
   } else {
-    file <<"(ret (((value " <<*ret.expr <<")\n";
-    file <<"(ptr ";
-    if (ret.isPtr) {
-      if (ret.funPtr == NULL) {
-        if (ret.pointee.doTraceValueIn ||
-            ret.pointee.doTraceValueOut) {
-          file <<"(Curioptr ((before ((full ()) (break_down ()))) (after ";
-          dumpPointeeOutSExpr(ret.pointee, file);
-          file <<")))\n";
-        } else {
-          file <<"Apathptr";
-        }
-      } else {
-        file <<"(Funptr \"" <<ret.funPtr->getName() <<"\")";
-      }
-    } else {
-      file <<"Nonptr";
-    }
-    file <<"))))\n";
+    file << "(value " << before->expr << ")\n";
   }
+
+  file << "(ptr ";
+  if (after->type->isPointerType()) {
+    if (before->pointee.isNull() && after->pointee.isNull()) {
+      file << "Apathptr";
+    } else if (??? IS FUNCTION PTR ???) {
+      file << "(Funptr \"" << ??? NAME ??? << "\")";
+    } else {
+    file << "(Curioptr\n";
+
+    file << "((before ";
+    if (before == nullptr) {
+      file << "((full ()) (break_down ()))";
+    } else {
+      dumpCallValue(before, file);
+    }
+    file << ")\n";
+    file << "(after ";
+    dumpCallValue(after, file);
+    file << ")))\n";
+    }
+  } else {
+    file << "Nonptr";
+  }
+
+  file << ")";
 }
 
-bool dumpCallInfoSExpr(const CallInfo& ci, llvm::raw_ostream& file) {
-  file <<"((fun_name \"" <<ci.f->getName() <<"\")\n (args (";
-  assert(ci.returned);
-  for (auto argIter = ci.args.begin(), end = ci.args.end(); argIter != end; ++argIter) {
-    const CallArg *arg = &*argIter;
-    if (!dumpCallArgSExpr(arg, file)) return false;
+void dumpCallInfo(const CallInfo& ci, llvm::raw_ostream& file) {
+  file << "((fun_name \"" << ci.function->function->getName() << "\")\n (args (";
+  for (int n = 0; n < ci.argsBefore.size(); ++n) {
+    auto arg = ci.function->function->args()[n];
+    auto argBefore = ci.argsBefore[n];
+    auto argAfter = ci.argsAfter[n];
+
+    file <<"\n((aname \"" << arg->getName() <<"\")\n";
+    dumpCallValuePair(argBefore, argAfter, file);
+    file <<")\n";
   }
+
   file <<"))\n";
-  dumpRetSExpr(ci.ret, file);
-  file <<"(call_context (";
+
+  if (ci.returnValue->expr.isNull()) {
+    file << "(ret ())";
+  } else {
+    dumpCallValuePair(nullptr, ci.returnValue, file);
+  }
+
+  file << "(call_context (";
   for (auto cci = ci.callContext.begin(), cce = ci.callContext.end(); cci != cce; ++cci) {
-    file <<"\n" <<**cci;
+    file << "\n" << **cci;
   }
-  file <<"))\n";
-  file <<"(ret_context (";
+  file << "))\n";
+  file << "(ret_context (";
   for (auto rci = ci.returnContext.begin(), rce = ci.returnContext.end(); rci != rce; ++rci) {
-    file <<"\n" <<**rci;
+    file << "\n" << **rci;
   }
-  file <<")))\n";
-  return true;
+  file << ")))\n";
 }
 
 llvm::raw_fd_ostream *KleeHandler::openNextCallPathPrefixFile() {
-  unsigned id = ++m_callPathPrefixIndex;
+  unsigned id = ++m_traceIndex;
   std::stringstream filename;
   filename << "call-prefix" << std::setfill('0') << std::setw(6) << id << '.' << "txt";
   return openOutputFile(filename.str());
 }
 
-void KleeHandler::dumpCallPathPrefixes() {
-  m_callTree.dumpCallPrefixesSExpr(std::list<CallInfo>(), this);
+void KleeHandler::dumpTraces() {
+  m_callTree.dumpTraces(std::list<CallInfo>(), this);
 }
 
   // load a .path file

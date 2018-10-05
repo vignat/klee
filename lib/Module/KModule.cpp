@@ -380,7 +380,8 @@ KFunction::KFunction(llvm::Function *_function,
   : function(_function),
     numArgs(function->arg_size()),
     numInstructions(0),
-    trackCoverage(true) {
+    trackCoverage(true),
+    module(km) {
 
   // Build loop info, for loop-invariant deduction.
   llvm::DominatorTreeBase<llvm::BasicBlock> dt(false);

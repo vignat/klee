@@ -1480,121 +1480,6 @@ static inline const llvm::fltSemantics * fpWidthToSemantics(unsigned width) {
   }
 }
 
-void dumpFields(std::map<int, klee::FieldDescr>* fields, size_t base,
-                const klee::ExecutionState& state) {
-  std::map<int, klee::FieldDescr>::iterator i = fields->begin(),
-    e = fields->end();
-  for (; i != e; ++i) {
-    int offset = i->first;
-    ref<klee::ConstantExpr> addrExpr =
-      klee::ConstantExpr::alloc(base + offset,
-                                sizeof(size_t)*8);
-    if (i->second.doTraceValueOut)
-      i->second.outVal = state.readMemoryChunk(addrExpr, i->second.width,
-                                               true);
-    if (i->second.addr == 0)
-      i->second.addr = base + offset;
-    else {
-      assert(i->second.addr == base + offset &&
-             "field address can not change during the execution.");
-    }
-    dumpFields(&i->second.fields, base + offset, state);
-  }
-}
-
-void klee::FillCallInfoOutput(Function* f,
-                              bool isVoidReturn,
-                              ref<Expr> result,
-                              const ExecutionState& state,
-                              const Executor& exec,
-                              CallInfo* info) {
-  llvm::Type *retType =
-    (dyn_cast<FunctionType>(cast<PointerType>(f->getType())->
-                            getElementType()))->
-    getReturnType();
-
-  assert(info->returned == false);
-  if (!isVoidReturn) {
-    info->ret.expr = result;
-    info->ret.isPtr = retType->isPointerTy();
-    if (info->ret.isPtr && info->ret.pointee.doTraceValueOut) {
-      llvm::Type *elementType = (cast<PointerType>(retType))->
-        getElementType();
-      assert(isa<klee::ConstantExpr>(result) &&
-             "No support for symbolic pointer return values.");
-      ref<klee::ConstantExpr> address = cast<klee::ConstantExpr>(result);
-      if (elementType->isFunctionTy()) {
-        uint64_t addr = address->getZExtValue();
-        info->ret.funPtr = (Function*) addr;
-      } else {
-        if (info->ret.pointee.width == 0) {
-          info->ret.pointee.width = exec.getWidthForLLVMType(elementType);
-        }
-        info->ret.pointee.outVal = state.readMemoryChunk(address,
-                                                         info->ret.pointee.width,
-                                                         true);
-        info->ret.funPtr = NULL;
-        size_t base = address->getZExtValue();
-        dumpFields(&info->ret.pointee.fields, base, state);
-      }
-    }
-    if (retType->isStructTy()) {
-      llvm::StructType *retS = cast<llvm::StructType>(retType);
-      assert(retS->getNumElements() == 2);
-      llvm::Type* ptrType = retS->getElementType(0);
-      llvm::Type* sizeType = retS->getElementType(1);
-      assert(ptrType->isPointerTy());
-      assert(sizeType->isIntegerTy());
-      assert(isa<klee::ConstantExpr>(result));
-      ref<klee::ConstantExpr> rez = cast<klee::ConstantExpr>(result);
-      ref<klee::ConstantExpr> rezP =
-        cast<klee::ConstantExpr>(ExtractExpr::create
-                                 (rez, 0, exec.getWidthForLLVMType(ptrType)));
-      ref<klee::ConstantExpr> rezS =
-        cast<klee::ConstantExpr>(ExtractExpr::create
-                                 (rez, exec.getWidthForLLVMType(ptrType),
-                                  exec.getWidthForLLVMType(sizeType)) );
-      Expr::Width width = 8*rezS->getZExtValue();
-      info->ret.isPtr = true;
-      info->ret.pointee.outVal = state.readMemoryChunk(rezP, width, true);
-      info->ret.funPtr = NULL;
-      info->ret.expr = rezP;
-    }
-  }
-
-  int numParams = info->args.size();
-  for (int i = 0; i < numParams; ++i) {
-    CallArg *arg = &info->args[i];
-    if (arg->isPtr && arg->pointee.doTraceValueOut
-        && arg->funPtr == NULL) {
-      arg->pointee.outVal =
-        state.readMemoryChunk(arg->expr,
-                              arg->pointee.width,
-                              true);
-      size_t base = (cast<ConstantExpr>(arg->expr))->getZExtValue();
-      dumpFields(&arg->pointee.fields, base, state);
-    }
-  }
-  std::map<size_t, CallExtraPtr>::iterator i = info->extraPtrs.begin(),
-    e = info->extraPtrs.end();
-  for (; i != e; ++i) {
-    CallExtraPtr *extraPtr = &i->second;
-    size_t addr = i->first;
-    extraPtr->accessibleOut &=
-      state.isAccessibleAddr(ConstantExpr::alloc(addr, 8*sizeof(size_t)));
-    extraPtr->pointee.outVal =
-      state.constraints.simplifyExpr
-      (state.readMemoryChunk(ConstantExpr::alloc(addr, 8*sizeof(size_t)),
-                             extraPtr->pointee.width,
-                             true));
-    dumpFields(&extraPtr->pointee.fields, addr, state);
-  }
-
-  info->returned = true;
-
-  state.recordRetConstraints(info);
-}
-
 void Executor::executeInstruction(ExecutionState &state, KInstruction *ki) {
   Instruction *i = ki->inst;
   switch (i->getOpcode()) {
@@ -1611,9 +1496,8 @@ void Executor::executeInstruction(ExecutionState &state, KInstruction *ki) {
     }
 
     Function* f = ri->getParent()->getParent();
-    if (!state.callPath.empty() && f == state.callPath.back().f) {
-      CallInfo *info = &state.callPath.back();
-      FillCallInfoOutput(f, isVoidReturn, result, state, *this, info);
+    if (!state.callPath.empty() && f == state.callPath.back().function->function) {
+      state.callPath.back().fillValuesAfter(state, result);
     }
     if (state.stack.size() <= 1) {
       assert(!caller && "caller set on initial stack frame");
@@ -1637,7 +1521,7 @@ void Executor::executeInstruction(ExecutionState &state, KInstruction *ki) {
           // may need to do coercion due to bitcasts
           Expr::Width from = result->getWidth();
           Expr::Width to = getWidthForLLVMType(t);
-            
+
           if (from != to) {
             bool isSExt = true;
             if (isa<InvokeInst>(caller) || isa<CallInst>(caller)) {
@@ -3025,9 +2909,7 @@ void Executor::terminateState(ExecutionState &state) {
   }
 
   if (state.loopInProcess.isNull()) {
-    if (state.doTrace) {
-      interpreterHandler->processCallPath(state);
-    }
+    interpreterHandler->processCallPath(state);
     interpreterHandler->incPathsExplored();
   }
 
@@ -3168,7 +3050,6 @@ void Executor::terminateStateOnError(ExecutionState &state,
 
     interpreterHandler->processTestCase(state, msg.str().c_str(), suffix);
   }
-  state.doTrace = false;
 
   terminateState(state);
 

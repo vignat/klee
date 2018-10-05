@@ -82,22 +82,60 @@ struct FunctionAlias {
   std::string alias;
 };
 
+/* --- Notes on tracing ---
+
+   We trace the following:
+   - Arguments before the call
+   - Arguments after the call
+   - Return values
+
+   They are always traced; for in- or out-only arguments, just set the pointer to NULL after/before calling.
+
+   At the "top level", i.e. a value that is an argument or a return value, we only support integers and pointers.
+   Pointers can point to structs, which will be traced, and structs can contain pointers, whose contents will be traced.
+
+   Symbolic pointers are not followed.
+ */
+
 struct CallValue {
-  ref<Expr> value;
+  Type* type;
+
+  // Always set
+  ref<Expr> expr;
+
+  // Set for values that are not arguments
+  ref<Expr> address;
+
+  // Exclusive (if struct or pointer respectively)
   std::vector<CallValue*> children;
+  CallValue* pointee;
+
+  // Assumes type is set, and either expr (for parameters/ret vals) or address (for nested stuff) are set.
+  void fill(const ExecutionState& state, const DataLayout* layout);
+
+  SymbolSet getSymbols() const;
+
+  bool equals(const CallValue& other) const;
 };
 
 struct CallInfo {
-  Function* function;
+  KFunction* function; // note the K here!
 
-  // 0 is return value, rest are args
-  std::vector<CallValue> valuesBefore;
-  std::vector<CallValue> valuesAfter;
+  std::vector<CallValue*> argsBefore;
+  std::vector<CallValue*> argsAfter;
+  CallValue* returnValue;
 
   std::vector<ref<Expr>> callContext;
   std::vector<ref<Expr>> returnContext;
 
-  SymbolSet computeRetSymbolSet() const;
+  // Assumes function is set
+  void fillValuesBefore(const ExecutionState& state);
+  // Assumes function is set and fillValuesBefore has been called
+  void fillValuesAfter(const ExecutionState& state, ref<Expr> result);
+
+  SymbolSet getSymbols() const;
+
+  bool equals(const CallInfo& other, bool compareOutputs) const;
 };
 
 struct HavocInfo {
@@ -252,10 +290,6 @@ public:
 
   std::vector<CallInfo> callPath;
   SymbolSet relevantSymbols;
-
-  /// @brief: a flag indicating that the state is genuine and not
-  ///  a product of some ancillary analysis, like loop-invariant search.
-  bool doTrace;
 
   /// @brief: Whether to forgive the undeclared memory location changing their
   ///  value during loop invariant analysis.

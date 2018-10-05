@@ -60,6 +60,8 @@ namespace klee {
     /// "coverable" for statistics and search heuristics.
     bool trackCoverage;
 
+    KModule* module;
+
   private:
     KFunction(const KFunction&);
     KFunction &operator=(const KFunction&);
