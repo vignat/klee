@@ -360,6 +360,7 @@ public:
   void addConstraint(ref<Expr> e) { constraints.addConstraint(e); }
 
   bool merge(const ExecutionState &b);
+  void dumpStack() const;
   void dumpStack(llvm::raw_ostream &out) const;
   bool isAccessibleAddr(ref<Expr> addr) const;
   ref<Expr> readMemoryChunk(ref<Expr> addr,

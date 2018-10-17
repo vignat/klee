@@ -475,6 +475,10 @@ bool ExecutionState::merge(const ExecutionState &b) {
   return true;
 }
 
+void ExecutionState::dumpStack() const {
+  dumpStack(llvm::errs());
+}
+
 void ExecutionState::dumpStack(llvm::raw_ostream &out) const {
   unsigned idx = 0;
   const KInstruction *target = prevPC;
