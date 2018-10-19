@@ -3124,6 +3124,38 @@ bool Executor::shouldExitOn(enum TerminateReason termReason) {
   return false;
 }
 
+void Executor::recordState(ExecutionState &state, const llvm::Twine &messaget,
+                           const char *suffix, const llvm::Twine &info) {
+  std::string message = messaget.str();
+  static std::set<std::pair<Instruction *, std::string>> emittedErrors;
+  Instruction *lastInst;
+  const InstructionInfo &ii =
+      getLastNonKleeInternalInstruction(state, &lastInst);
+
+  if (ii.file != "") {
+    klee_message("ERROR: %s:%d: %s", ii.file.c_str(), ii.line, message.c_str());
+  } else {
+    klee_message("ERROR: (location information missing) %s", message.c_str());
+  }
+
+  std::string MsgString;
+  llvm::raw_string_ostream msg(MsgString);
+  msg << "Error: " << message << "\n";
+  if (ii.file != "") {
+    msg << "File: " << ii.file << "\n";
+    msg << "Line: " << ii.line << "\n";
+    msg << "assembly.ll line: " << ii.assemblyLine << "\n";
+  }
+  msg << "Stack: \n";
+  state.dumpStack(msg);
+
+  std::string info_str = info.str();
+  if (info_str != "")
+    msg << "Info: \n" << info_str;
+
+  interpreterHandler->processTestCase(state, msg.str().c_str(), suffix);
+}
+
 void Executor::terminateStateOnError(ExecutionState &state,
                                      const llvm::Twine &messaget,
                                      enum TerminateReason termReason,
@@ -3537,10 +3569,7 @@ void Executor::executeMemoryOperation(ExecutionState &state,
 
   if (DebugReportSymbdex) {
     if (!isa<ConstantExpr>(address)) {
-      printf("\n");
-      printf("Some symbolic indexing going on here:\n");
-      llvm::errs() << state.pc->getSourceLocation();
-      state.dumpStack(llvm::errs());
+      recordState(state, "Some symbolic indexing going on here.", "symbdex");
     }
   }
 

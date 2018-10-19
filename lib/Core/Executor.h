@@ -442,6 +442,10 @@ private:
     terminateStateOnError(state, message, Exec, NULL, info);
   }
 
+  // Record state as a test case and continue execution.
+  void recordState(ExecutionState &state, const llvm::Twine &messaget,
+                   const char *suffix, const llvm::Twine &info = "");
+
   /// bindModuleConstants - Initialize the module constant table.
   void bindModuleConstants();
 
