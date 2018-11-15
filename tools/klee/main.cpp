@@ -675,66 +675,88 @@ void dumpPointeeOutSExpr(const FieldDescr& pointee,
   file <<")";
 }
 
+/*
+    >
+    > There are two big things remaining for klee_trace() to work:
+    > - Tracing void* values, which requires figuring out their type (how?)
+    > - Dumping pointers in structs, which the Validator currently doesn't support
+    >
+    > There's kind of a third thing... some types really shouldn't be dumped, like rte_mempool, so adding a command-line arg with a list of types to treat as opaque pointers would be cool.
+    >
+    > Wish you luck!
+    >
+    > - Solal
+    > EOF
+*/
+
 void dumpCallValue(const CallValue* val, llvm::raw_ostream& file) {
-
-}
-
-void dumpCallValuePair(const CallValue* before, const CallValue* after, llvm::raw_ostream& file) {
-  // Note that after always exists but before may not (for the return value)
-
-  if (before == nullptr) {
-    file << "(value " << after->expr << ")\n";
-  } else {
-    file << "(value " << before->expr << ")\n";
+  if (val->type->isPointerType()) {
+    if (val->pointee != NULL) {
+      // Pointer
+      file << "(Pointer (";
+      file << val->expr;
+      file << ") ";
+      dumpCallValue(val->pointee, file);
+      file << ")";
+      return;
+    } else if (dynamic_cast<PointerType>(val->type)->getElementType()->isFunctionType()) {
+      // Function pointer
+      Function* func = (Function*) dynamic_cast<ConstantExpr>(val->expr)->getZExtValue();
+      file << "(Funpointer \"" << func->getName() << "\")";
+      return;
+    } else {
+      // Opaque pointer, fall through and treat as a primitive
+    }
   }
 
-  file << "(ptr ";
-  if (after->type->isPointerType()) {
-    if (before != nullptr && before->pointee.isNull() && after->pointee.isNull()) {
-      file << "Apathptr";
-    } else if (before != nullptr && dynamic_cast<PointerType>(before->type)->getElementType()->isFunctionType()) {
-      Function* func = (Function*) dynamic_cast<ConstantExpr>(before->expr)->getZExtValue();
-      file << "(Funptr \"" << func->getName() << "\")";
-    } else {
-    file << "(Curioptr\n";
-
-    file << "((before ";
-    if (before == nullptr) {
-      file << "((full ()) (break_down ()))";
-    } else {
-      dumpCallValue(before, file);
-    }
+  if (val->children.size() > 0) {
+    // Struct
+    file << "(Struct (";
+    file << "(sname \"" << val->type->getName() << "\")\n";
+    file << "(full (";
+    file << val->expr;
     file << ")\n";
-    file << "(after ";
-    dumpCallValue(after, file);
-    file << ")))\n";
+    file << "(break_down (";
+    for (auto child : val->children) {
+      file << "((fname \"" << ??? FNAME ??? << "\")\n";
+      file << "(value ";
+      dumpCallValue(child, file);
+      file << ")";
+      file << "(addr " << child->address->getZExtValue() << "))\n";
     }
-  } else {
-    file << "Nonptr";
+    file << ")))";
+    return;
   }
 
-  file << ")";
+  // Primitive
+  file << "(Primitive (" << val->expr << "))";
 }
 
 void dumpCallInfo(const CallInfo& ci, llvm::raw_ostream& file) {
-  file << "((fun_name \"" << ci.function->function->getName() << "\")\n (args (";
+  file << "((fun_name \"" << ci.function->function->getName() << "\") (args ("\n;
   for (int n = 0; n < ci.argsBefore.size(); ++n) {
     auto arg = ci.function->function->args()[n];
     auto argBefore = ci.argsBefore[n];
     auto argAfter = ci.argsAfter[n];
 
-    file <<"\n((aname \"" << arg->getName() <<"\")\n";
-    dumpCallValuePair(argBefore, argAfter, file);
+    file << "((aname \"" << arg->getName() <<"\")\n";
+    file << "(before ";
+    dumpCallValue(argBefore, file);
+    file << "\n";
+    file << "(after ";
+    dumpCallValue(argAfter, file);
     file <<")\n";
   }
 
   file <<"))\n";
 
+  file << "(ret ";
   if (ci.returnValue->expr.isNull()) {
-    file << "(ret ())";
+    file << "()";
   } else {
-    dumpCallValuePair(nullptr, ci.returnValue, file);
+    dumpCallValue(ci.returnValue, file);
   }
+  file << ")\n";
 
   file << "(call_context (";
   for (auto cci = ci.callContext.begin(), cce = ci.callContext.end(); cci != cce; ++cci) {

@@ -104,7 +104,7 @@ struct CallValue {
   ref<Expr> expr;
 
   // Set for values that are not arguments
-  ref<Expr> address;
+  ref<ConstantExpr> address;
 
   // Exclusive (if struct or non-function pointer respectively)
   std::vector<CallValue*> children;

@@ -791,7 +791,7 @@ void CallValue::fill(const ExecutionState& state, const DataLayout* layout) {
 
       CallValue* val = new CallValue();
       val->type = structTy->elements()[n];
-      val->address = AddExpr::create(address, ConstantExpr::create(offset));
+      val->address = ConstantExpr::create(address->getZExtValue() + offset);
       val->fill(state, layout);
 
       children.push_back(val);
@@ -818,7 +818,7 @@ void CallValue::fill(const ExecutionState& state, const DataLayout* layout) {
 
     pointee = new CallValue();
     pointee->type = pointerTy->getElementType();
-    pointee->address = expr;
+    pointee->address = dynamic_cast<ConstantExpr>(expr);
     pointee->fill(state, layout);
   } else if(type->isIntegerTy()) {
     // Nothing to do here, expr must be set by this point
