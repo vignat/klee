@@ -22,6 +22,9 @@
 #include "TimingSolver.h"
 #include "klee/LoopAnalysis.h"
 
+#include "klee/Internal/ADT/ImmutableSet.h"
+#include "klee/Internal/ADT/ImmutableMap.h"
+
 #include "klee/Expr.h"
 
 #include "Memory.h"
@@ -47,6 +50,16 @@ namespace {
   cl::opt<bool>
   DebugLogStateMerge("debug-log-state-merge");
 }
+
+
+namespace klee {
+bool operator< (const FunctionAlias &c1, const FunctionAlias &c2)
+{
+  // works for regexes because we set their name too
+  return c1.name < c2.name;
+}
+}
+
 
 /***/
 
@@ -241,6 +254,7 @@ void ExecutionState::addSymbolic(const MemoryObject *mo, const Array *array) {
 }
 ///
 
+
 std::string ExecutionState::getFnAlias(std::string fn) {
   for (auto& candidate : fnAliases) {
     if (candidate.isRegex) {
@@ -264,7 +278,7 @@ void ExecutionState::addFnAlias(std::string old_fn, std::string new_fn) {
     .name = old_fn,
     .alias = new_fn
   };
-  fnAliases.push_back(alias);
+  fnAliases = fnAliases.insert(alias);
 }
 
 void ExecutionState::addFnRegexAlias(std::string fn_regex, std::string new_fn) {
@@ -276,15 +290,15 @@ void ExecutionState::addFnRegexAlias(std::string fn_regex, std::string new_fn) {
     .name = fn_regex,
     .alias = new_fn
   };
-  fnAliases.push_back(alias);
+  fnAliases = fnAliases.insert(alias);
 }
 
 void ExecutionState::removeFnAlias(std::string fn) {
-  fnAliases.erase(std::remove_if(fnAliases.begin(), fnAliases.end(),
-                                 [fn](FunctionAlias candidate) {
-                                   return candidate.name == fn;
-                                 }),
-                  fnAliases.end());
+  for (auto& alias : fnAliases) {
+    if (alias.name == fn) {
+      fnAliases = fnAliases.remove(alias);
+    }
+  }
 }
 
 std::string ExecutionState::getInterceptReader(uint64_t addr) {
@@ -306,11 +320,11 @@ std::string ExecutionState::getInterceptWriter(uint64_t addr) {
 }
 
 void ExecutionState::addReadsIntercept(uint64_t addr, std::string reader) {
-  readsIntercepts[addr] = reader;
+  readsIntercepts = readsIntercepts.replace(std::make_pair(addr, reader));
 }
 
 void ExecutionState::addWritesIntercept(uint64_t addr, std::string writer) {
-  writesIntercepts[addr] = writer;
+  writesIntercepts = writesIntercepts.replace(std::make_pair(addr, writer));
 }
 
 /**/

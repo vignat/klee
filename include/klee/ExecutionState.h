@@ -80,6 +80,8 @@ struct FunctionAlias {
   std::regex nameRegex;
   std::string name;
   std::string alias;
+
+  friend bool operator< (const FunctionAlias &c1, const FunctionAlias &c2);
 };
 
 struct FieldDescr {
@@ -203,9 +205,9 @@ private:
   // unsupported, use copy constructor
   ExecutionState &operator=(const ExecutionState &);
 
-  std::vector<FunctionAlias> fnAliases;
-  std::map<uint64_t, std::string> readsIntercepts;
-  std::map<uint64_t, std::string> writesIntercepts;
+  ImmutableSet<FunctionAlias> fnAliases;
+  ImmutableMap<uint64_t, std::string> readsIntercepts;
+  ImmutableMap<uint64_t, std::string> writesIntercepts;
 
 public:
   // Execution - Control Flow specific
