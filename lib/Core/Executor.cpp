@@ -1631,9 +1631,10 @@ void Executor::executeInstruction(ExecutionState &state, KInstruction *ki) {
     }
 
     Function* f = ri->getParent()->getParent();
-    if (!state.callPath.empty() && f == state.callPath.back().f) {
-      CallInfo *info = &state.callPath.back();
-      FillCallInfoOutput(f, isVoidReturn, result, state, *this, info);
+    if (!state.callPath.empty() && f == state.callPath.max().f) {
+      CallInfo info = state.callPath.max();
+      FillCallInfoOutput(f, isVoidReturn, result, state, *this, &info);
+      state.callPath = state.callPath.replace(info);
     }
     if (state.stack.size() <= 1) {
       assert(!caller && "caller set on initial stack frame");

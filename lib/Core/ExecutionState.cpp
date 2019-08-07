@@ -58,6 +58,10 @@ bool operator< (const FunctionAlias &c1, const FunctionAlias &c2)
   // works for regexes because we set their name too
   return c1.name < c2.name;
 }
+
+bool operator< (const CallInfo& c1, const CallInfo& c2) {
+  return c1.n < c2.n;
+}
 }
 
 
@@ -615,44 +619,47 @@ ref<Expr> ExecutionState::readMemoryChunk(ref<Expr> addr,
 
 void ExecutionState::traceRet() {
   if (callPath.empty() ||
-      callPath.back().returned ||
-      callPath.back().f != stack.back().kf->function) {
+      callPath.max().returned ||
+      callPath.max().f != stack.back().kf->function) {
     if (!callPath.empty()) {
-      SymbolSet symbols = callPath.back().computeRetSymbolSet();
+      SymbolSet symbols = callPath.max().computeRetSymbolSet();
       relevantSymbols.insert(symbols.begin(), symbols.end());
     }
-    callPath.push_back(CallInfo());
-    callPath.back().callPlace = stack.back().caller->inst->getDebugLoc();
-    callPath.back().f = stack.back().kf->function;
-    callPath.back().returned = false;
+    CallInfo info;
+    info.n = callPath.size();
+    info.callPlace = stack.back().caller->inst->getDebugLoc();
+    info.f = stack.back().kf->function;
+    info.returned = false;
     std::vector<ref<Expr> > constrs =
       relevantConstraints(relevantSymbols);
-    callPath.back().callContext.insert(callPath.back().callContext.end(),
-                                       constrs.begin(), constrs.end());
+    info.callContext.insert(info.callContext.end(), constrs.begin(), constrs.end());
+    callPath = callPath.insert(info);
   }
 }
 
 void ExecutionState::traceRetPtr(Expr::Width width,
                                  bool tracePointee) {
   traceRet();
-  RetVal *ret = &callPath.back().ret;
-  ret->isPtr = true;
-  ret->pointee.doTraceValueIn = tracePointee;
-  ret->pointee.doTraceValueOut = tracePointee;
-  ret->pointee.width = width;
+  CallInfo info = callPath.max();
+  info.ret.isPtr = true;
+  info.ret.pointee.doTraceValueIn = tracePointee;
+  info.ret.pointee.doTraceValueOut = tracePointee;
+  info.ret.pointee.width = width;
+  callPath = callPath.replace(info);
 }
 
 void ExecutionState::traceArgValue(ref<Expr> val, std::string name) {
   traceRet();
-  callPath.back().args.push_back(CallArg());
-  CallArg *argInfo = &callPath.back().args.back();
-  argInfo->expr = val;
-  argInfo->isPtr = false;
-  argInfo->name = name;
+  CallInfo info = callPath.max();
+  CallArg arg;
+  arg.expr = val;
+  arg.isPtr = false;
+  arg.name = name;
+  info.args.push_back(arg);
   std::vector<ref<Expr> > constrs =
     relevantConstraints(GetExprSymbols::visit(val));
-  callPath.back().callContext.insert(callPath.back().callContext.end(),
-                                     constrs.begin(), constrs.end());
+  info.callContext.insert(info.callContext.end(), constrs.begin(), constrs.end());
+  callPath = callPath.replace(info);
 }
 
 void ExecutionState::traceArgPtr(ref<Expr> arg, Expr::Width width,
@@ -661,7 +668,8 @@ void ExecutionState::traceArgPtr(ref<Expr> arg, Expr::Width width,
                                  bool tracePointeeIn,
                                  bool tracePointeeOut) {
   traceArgValue(arg, name);
-  CallArg *argInfo = &callPath.back().args.back();
+  CallInfo info = callPath.max();
+  CallArg *argInfo = &info.args.back();
   argInfo->isPtr = true;
   argInfo->pointee.width = width;
   argInfo->pointee.type = type;
@@ -676,8 +684,8 @@ void ExecutionState::traceArgPtr(ref<Expr> arg, Expr::Width width,
     symbols.insert(indirectSymbols.begin(), indirectSymbols.end());
   }
   std::vector<ref<Expr> > constrs = relevantConstraints(symbols);
-  callPath.back().callContext.insert(callPath.back().callContext.end(),
-                                     constrs.begin(), constrs.end());
+  info.callContext.insert(info.callContext.end(), constrs.begin(), constrs.end());
+  callPath = callPath.replace(info);
 }
 
 void ExecutionState::traceArgArr(ref<Expr> arg, Expr::Width width, size_t count,
@@ -689,7 +697,8 @@ void ExecutionState::traceArgArr(ref<Expr> arg, Expr::Width width, size_t count,
     return traceArgPtr(arg, width, name, type, tracePointeeIn, tracePointeeOut);
   }
   traceArgValue(arg, name);
-  CallArg *argInfo = &callPath.back().args.back();
+  CallInfo info = callPath.max();
+  CallArg *argInfo = &info.args.back();
   argInfo->isPtr = true;
   argInfo->pointee.width = width*count;
   argInfo->pointee.type = type;
@@ -704,8 +713,8 @@ void ExecutionState::traceArgArr(ref<Expr> arg, Expr::Width width, size_t count,
     symbols.insert(indirectSymbols.begin(), indirectSymbols.end());
   }
   std::vector<ref<Expr> > constrs = relevantConstraints(symbols);
-  callPath.back().callContext.insert(callPath.back().callContext.end(),
-                                     constrs.begin(), constrs.end());
+  info.callContext.insert(info.callContext.end(), constrs.begin(), constrs.end());
+  callPath = callPath.replace(info);
   for (size_t i = 0; i < count; ++i) {
     //width is given in bits, we need bytes for the offset
     traceArgPtrField(arg, i*width/8, width, std::to_string(i), tracePointeeIn, tracePointeeOut);
@@ -715,10 +724,12 @@ void ExecutionState::traceArgArr(ref<Expr> arg, Expr::Width width, size_t count,
 void ExecutionState::traceArgFunPtr(ref<Expr> arg,
                                     std::string name) {
   traceArgValue(arg, name);
-  CallArg *argInfo = &callPath.back().args.back();
+  CallInfo info = callPath.max();
+  CallArg *argInfo = &info.args.back();
   argInfo->isPtr = true;
   ref<klee::ConstantExpr> address = cast<klee::ConstantExpr>(arg);
   argInfo->funPtr = (Function*)address->getZExtValue();
+  callPath = callPath.replace(info);
 }
 
 void ExecutionState::traceArgPtrField(ref<Expr> arg,
@@ -727,10 +738,11 @@ void ExecutionState::traceArgPtrField(ref<Expr> arg,
                                       std::string name,
                                       bool doTraceValueIn,
                                       bool doTraceValueOut) {
-  assert(!callPath.empty() &&
-         callPath.back().f == stack.back().kf->function &&
+  assert(!callPath.empty() && "empty callpath :(");
+  CallInfo info = callPath.max();
+  assert(info.f == stack.back().kf->function &&
          "Must trace the function first to trace a particular field.");
-  CallArg *argInfo = callPath.back().getCallArgPtrp(arg);
+  CallArg *argInfo = info.getCallArgPtrp(arg);
   assert(argInfo != 0 &&
          "Must first trace the pointer arg to trace a particular field.");
   assert(argInfo->pointee.width > 0 && "Cannot fit a field into zero bytes.");
@@ -754,6 +766,7 @@ void ExecutionState::traceArgPtrField(ref<Expr> arg,
   descr.doTraceValueIn = doTraceValueIn;
   descr.doTraceValueOut = doTraceValueOut;
   argInfo->pointee.fields[offset] = descr;
+  callPath = callPath.replace(info);
 }
 
 void ExecutionState::traceArgPtrFieldArr(ref<Expr> arg,
@@ -767,9 +780,10 @@ void ExecutionState::traceArgPtrFieldArr(ref<Expr> arg,
     return traceArgPtrField(arg, offset, el_width, name, doTraceValueIn, doTraceValueOut);
   }
   assert(!callPath.empty() &&
-         callPath.back().f == stack.back().kf->function &&
+         callPath.max().f == stack.back().kf->function &&
          "Must trace the function first to trace a particular field.");
-  CallArg *argInfo = callPath.back().getCallArgPtrp(arg);
+  CallInfo info = callPath.max();
+  CallArg *argInfo = info.getCallArgPtrp(arg);
   assert(argInfo != 0 &&
          "Must first trace the pointer arg to trace a particular field.");
   assert(argInfo->pointee.width > 0 && "Cannot fit a field into zero bytes.");
@@ -793,6 +807,7 @@ void ExecutionState::traceArgPtrFieldArr(ref<Expr> arg,
   descr.doTraceValueIn = doTraceValueIn;
   descr.doTraceValueOut = doTraceValueOut;
   argInfo->pointee.fields[offset] = descr;
+  callPath = callPath.replace(info);
   for (int i = 0; i < count; ++i) {
     //width is given in bits, we need bytes for the offset
     traceArgPtrNestedField(arg, offset, i*el_width/8,
@@ -810,9 +825,10 @@ void ExecutionState::traceArgPtrNestedNestedField(ref<Expr> arg,
                                                   std::string name,
                                                   bool trace_in, bool trace_out) {
   assert(!callPath.empty() &&
-         callPath.back().f == stack.back().kf->function &&
+         callPath.max().f == stack.back().kf->function &&
          "Must trace the function first to trace a particular field.");
-  CallArg *argInfo = callPath.back().getCallArgPtrp(arg);
+  CallInfo info = callPath.max();
+  CallArg *argInfo = info.getCallArgPtrp(arg);
   assert(argInfo != 0 &&
          "Must first trace the pointer arg to trace a particular field.");
   assert(argInfo->pointee.width > 0 && "Cannot fit a field into zero bytes.");
@@ -852,6 +868,7 @@ void ExecutionState::traceArgPtrNestedNestedField(ref<Expr> arg,
     fields[base_base_offset].
     fields[base_offset].
     fields[offset] = descr;
+  callPath = callPath.replace(info);
 }
 void ExecutionState::traceArgPtrNestedField(ref<Expr> arg,
                                             int base_offset,
@@ -860,9 +877,10 @@ void ExecutionState::traceArgPtrNestedField(ref<Expr> arg,
                                             std::string name,
                                             bool trace_in, bool trace_out) {
   assert(!callPath.empty() &&
-         callPath.back().f == stack.back().kf->function &&
+         callPath.max().f == stack.back().kf->function &&
          "Must trace the function first to trace a particular field.");
-  CallArg *argInfo = callPath.back().getCallArgPtrp(arg);
+  CallInfo info = callPath.max();
+  CallArg *argInfo = info.getCallArgPtrp(arg);
   assert(argInfo != 0 &&
          "Must first trace the pointer arg to trace a particular field.");
   assert(argInfo->pointee.width > 0 && "Cannot fit a field into zero bytes.");
@@ -891,6 +909,7 @@ void ExecutionState::traceArgPtrNestedField(ref<Expr> arg,
   descr.doTraceValueIn = trace_in;
   descr.doTraceValueOut = trace_out;
   argInfo->pointee.fields[base_offset].fields[offset] = descr;
+  callPath = callPath.replace(info);
 }
 
 void ExecutionState::traceArgPtrNestedFieldArr(ref<Expr> arg,
@@ -904,9 +923,10 @@ void ExecutionState::traceArgPtrNestedFieldArr(ref<Expr> arg,
     return traceArgPtrNestedField(arg, base_offset, offset, width, name, trace_in, trace_out);
   }
   assert(!callPath.empty() &&
-         callPath.back().f == stack.back().kf->function &&
+         callPath.max().f == stack.back().kf->function &&
          "Must trace the function first to trace a particular field.");
-  CallArg *argInfo = callPath.back().getCallArgPtrp(arg);
+  CallInfo info = callPath.max();
+  CallArg *argInfo = info.getCallArgPtrp(arg);
   assert(argInfo != 0 &&
          "Must first trace the pointer arg to trace a particular field.");
   assert(argInfo->pointee.width > 0 && "Cannot fit a field into zero bytes.");
@@ -935,6 +955,7 @@ void ExecutionState::traceArgPtrNestedFieldArr(ref<Expr> arg,
   descr.doTraceValueIn = trace_in;
   descr.doTraceValueOut = trace_out;
   argInfo->pointee.fields[base_offset].fields[offset] = descr;
+  callPath = callPath.replace(info);
   for (int i = 0; i < count; ++i) {
     //width is given in bits, we need bytes for the offset
     traceArgPtrNestedNestedField(arg, base_offset, offset, i*width/8,
@@ -949,9 +970,10 @@ void ExecutionState::traceExtraPtrNestedField(size_t ptr,
                                               std::string name,
                                               bool trace_in, bool trace_out) {
   assert(!callPath.empty() &&
-         callPath.back().f == stack.back().kf->function &&
+         callPath.max().f == stack.back().kf->function &&
          "Must trace the function first to trace a particular field.");
-  CallExtraPtr *extraPtr = &callPath.back().extraPtrs[ptr];
+  CallInfo info = callPath.max();
+  CallExtraPtr *extraPtr = &info.extraPtrs[ptr];
   assert(extraPtr != 0 &&
          "Must first trace the extra pointer to trace a particular field.");
   assert(extraPtr->pointee.width > (unsigned)offset + (unsigned)base_offset &&
@@ -973,6 +995,7 @@ void ExecutionState::traceExtraPtrNestedField(size_t ptr,
   descr.doTraceValueIn = trace_in;
   descr.doTraceValueOut = trace_out;
   extraPtr->pointee.fields[base_offset].fields[offset] = descr;
+  callPath = callPath.replace(info);
 }
 
 void ExecutionState::traceExtraPtrNestedFieldArr(size_t ptr,
@@ -986,9 +1009,10 @@ void ExecutionState::traceExtraPtrNestedFieldArr(size_t ptr,
     return traceExtraPtrNestedField(ptr, base_offset, offset, width, name, trace_in, trace_out);
   }
   assert(!callPath.empty() &&
-         callPath.back().f == stack.back().kf->function &&
+         callPath.max().f == stack.back().kf->function &&
          "Must trace the function first to trace a particular field.");
-  CallExtraPtr *extraPtr = &callPath.back().extraPtrs[ptr];
+  CallInfo info = callPath.max();
+  CallExtraPtr *extraPtr = &info.extraPtrs[ptr];
   assert(extraPtr != 0 &&
          "Must first trace the extra pointer to trace a particular field.");
   assert(extraPtr->pointee.width > (unsigned)offset + (unsigned)base_offset &&
@@ -1010,6 +1034,7 @@ void ExecutionState::traceExtraPtrNestedFieldArr(size_t ptr,
   descr.doTraceValueIn = trace_in;
   descr.doTraceValueOut = trace_out;
   extraPtr->pointee.fields[base_offset].fields[offset] = descr;
+  callPath = callPath.replace(info);
   for (int i = 0; i < count; ++i) {
     //width is given in bits, we need bytes for the offset
     traceExtraPtrNestedNestedField(ptr, base_offset, offset,
@@ -1026,9 +1051,10 @@ void ExecutionState::traceExtraPtrNestedNestedField(size_t ptr,
                                                     std::string name,
                                                     bool trace_in, bool trace_out) {
   assert(!callPath.empty() &&
-         callPath.back().f == stack.back().kf->function &&
+         callPath.max().f == stack.back().kf->function &&
          "Must trace the function first to trace a particular field.");
-  CallExtraPtr *extraPtr = &callPath.back().extraPtrs[ptr];
+  CallInfo info = callPath.max();
+  CallExtraPtr *extraPtr = &info.extraPtrs[ptr];
   assert(extraPtr != 0 &&
          "Must first trace the extra pointer to trace a particular field.");
   assert(extraPtr->pointee.width >
@@ -1061,6 +1087,7 @@ void ExecutionState::traceExtraPtrNestedNestedField(size_t ptr,
     fields[base_base_offset].
     fields[base_offset].
     fields[offset] = descr;
+  callPath = callPath.replace(info);
 }
 
 
@@ -1069,9 +1096,10 @@ void ExecutionState::traceExtraPtr(size_t ptr, Expr::Width width,
                                    std::string type,
                                    bool trace_in, bool trace_out) {
   traceRet();
-  callPath.back().extraPtrs.
+  CallInfo info = callPath.max();
+  info.extraPtrs.
     insert(std::pair<const size_t, CallExtraPtr>(ptr, CallExtraPtr()));
-  CallExtraPtr *extraPtr = &callPath.back().extraPtrs[ptr];
+  CallExtraPtr *extraPtr = &info.extraPtrs[ptr];
   extraPtr->ptr = ptr;
   extraPtr->name = name;
   extraPtr->pointee.width = width;
@@ -1090,8 +1118,8 @@ void ExecutionState::traceExtraPtr(size_t ptr, Expr::Width width,
     indirectSymbols = GetExprSymbols::visit(extraPtr->pointee.inVal);
   }
   std::vector<ref<Expr> > constrs = relevantConstraints(indirectSymbols);
-  callPath.back().callContext.insert(callPath.back().callContext.end(),
-                                     constrs.begin(), constrs.end());
+  info.callContext.insert(info.callContext.end(), constrs.begin(), constrs.end());
+  callPath = callPath.replace(info);
 }
 
 void ExecutionState::traceExtraPtrArr(size_t ptr, Expr::Width width, size_t count,
@@ -1102,9 +1130,10 @@ void ExecutionState::traceExtraPtrArr(size_t ptr, Expr::Width width, size_t coun
     return traceExtraPtr(ptr, width, name, type, trace_in, trace_out);
   }
   traceRet();
-  callPath.back().extraPtrs.
+  CallInfo info = callPath.max();
+  info.extraPtrs.
     insert(std::pair<const size_t, CallExtraPtr>(ptr, CallExtraPtr()));
-  CallExtraPtr *extraPtr = &callPath.back().extraPtrs[ptr];
+  CallExtraPtr *extraPtr = &info.extraPtrs[ptr];
   extraPtr->ptr = ptr;
   extraPtr->name = name;
   extraPtr->pointee.width = width*count;
@@ -1123,8 +1152,8 @@ void ExecutionState::traceExtraPtrArr(size_t ptr, Expr::Width width, size_t coun
     indirectSymbols = GetExprSymbols::visit(extraPtr->pointee.inVal);
   }
   std::vector<ref<Expr> > constrs = relevantConstraints(indirectSymbols);
-  callPath.back().callContext.insert(callPath.back().callContext.end(),
-                                     constrs.begin(), constrs.end());
+  info.callContext.insert(info.callContext.end(),constrs.begin(), constrs.end());
+  callPath = callPath.replace(info);
   for (size_t i = 0; i < count; ++i) {
     //width is given in bits, we need bytes for the offset
     traceExtraPtrField(ptr, i*width/8, width, std::to_string(i), trace_in, trace_out);
@@ -1137,9 +1166,10 @@ void ExecutionState::traceExtraPtrField(size_t ptr,
                                         std::string name,
                                         bool trace_in, bool trace_out) {
   assert(!callPath.empty() &&
-         callPath.back().f == stack.back().kf->function &&
+         callPath.max().f == stack.back().kf->function &&
          "Must trace the function first to trace a particular field.");
-  CallExtraPtr *extraPtr = &callPath.back().extraPtrs[ptr];
+  CallInfo info = callPath.max();
+  CallExtraPtr *extraPtr = &info.extraPtrs[ptr];
   assert(extraPtr->pointee.width > 0 && "Cannot fit a field into zero bytes.");
   assert(extraPtr->pointee.fields.count(offset) == 0 && "Conflicting field.");
   FieldDescr descr;
@@ -1155,6 +1185,7 @@ void ExecutionState::traceExtraPtrField(size_t ptr,
   descr.doTraceValueIn = trace_in;
   descr.doTraceValueOut = trace_out;
   extraPtr->pointee.fields[offset] = descr;
+  callPath = callPath.replace(info);
 }
 
 void ExecutionState::traceExtraPtrFieldArray(size_t ptr,
@@ -1167,9 +1198,10 @@ void ExecutionState::traceExtraPtrFieldArray(size_t ptr,
     return traceExtraPtrField(ptr, offset, el_width, name, trace_in, trace_out);
   }
   assert(!callPath.empty() &&
-         callPath.back().f == stack.back().kf->function &&
+         callPath.max().f == stack.back().kf->function &&
          "Must trace the function first to trace a particular field.");
-  CallExtraPtr *extraPtr = &callPath.back().extraPtrs[ptr];
+  CallInfo info = callPath.max();
+  CallExtraPtr *extraPtr = &info.extraPtrs[ptr];
   assert(extraPtr->pointee.width > 0 && "Cannot fit a field into zero bytes.");
   assert(extraPtr->pointee.fields.count(offset) == 0 && "Conflicting field.");
   FieldDescr descr;
@@ -1185,6 +1217,7 @@ void ExecutionState::traceExtraPtrFieldArray(size_t ptr,
   descr.doTraceValueIn = trace_in;
   descr.doTraceValueOut = trace_out;
   extraPtr->pointee.fields[offset] = descr;
+  callPath = callPath.replace(info);
   for (int i = 0; i < count; ++i) {
     //width is given in bits, we need bytes for the offset
     traceExtraPtrNestedField(ptr, offset,
@@ -1199,9 +1232,10 @@ void ExecutionState::traceRetPtrField(int offset,
                                       std::string name,
                                       bool doTraceValue) {
   assert(!callPath.empty() &&
-         callPath.back().f == stack.back().kf->function &&
+         callPath.max().f == stack.back().kf->function &&
          "Must trace the function first to trace a particular field.");
-  RetVal *ret = &callPath.back().ret;
+  CallInfo info = callPath.max();
+  RetVal *ret = &info.ret;
   assert(ret->isPtr && "Only a pointer can have fields traced.");
   assert(ret->pointee.width > 0 && "Cannot fit a field in zero sized mem chunk.");
   assert(ret->pointee.doTraceValueIn && "Must trace the whole pointee to trace"
@@ -1214,6 +1248,7 @@ void ExecutionState::traceRetPtrField(int offset,
   descr.doTraceValueIn = doTraceValue;
   descr.doTraceValueOut = doTraceValue;
   ret->pointee.fields[offset] = descr;
+  callPath = callPath.replace(info);
 }
 
 void ExecutionState::traceRetPtrNestedField(int base_offset,
@@ -1221,9 +1256,10 @@ void ExecutionState::traceRetPtrNestedField(int base_offset,
                                             Expr::Width width,
                                             std::string name) {
   assert(!callPath.empty() &&
-         callPath.back().f == stack.back().kf->function &&
+         callPath.max().f == stack.back().kf->function &&
          "Must trace the function first to trace a particular field.");
-  RetVal *ret = &callPath.back().ret;
+  CallInfo info = callPath.max();
+  RetVal *ret = &info.ret;
   assert(ret->isPtr && "Only a pointer can have fields traced.");
   assert(ret->pointee.width > 0 && "Cannot fit a field in zero sized mem chunk.");
   assert(ret->pointee.doTraceValueIn && "Must trace the whole pointee to trace"
@@ -1238,6 +1274,7 @@ void ExecutionState::traceRetPtrNestedField(int base_offset,
   descr.doTraceValueIn = true;
   descr.doTraceValueOut = true;
   ret->pointee.fields[base_offset].fields[offset] = descr;
+  callPath = callPath.replace(info);
 }
 
 void ExecutionState::recordRetConstraints(CallInfo *info) const {

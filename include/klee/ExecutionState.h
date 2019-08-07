@@ -136,6 +136,7 @@ struct CallExtraPtr {
 //TODO: Store assumptions increment as well. it is an important part of the call
 // these assumptions allow then to correctly match and distinguish call path prefixes.
 struct CallInfo {
+  int n;
   llvm::Function* f;
   std::vector<CallArg> args;
   std::map<size_t, CallExtraPtr> extraPtrs;
@@ -149,6 +150,8 @@ struct CallInfo {
   bool eq(const CallInfo& other) const;
   bool sameInvocation(const CallInfo* other) const;
   SymbolSet computeRetSymbolSet() const;
+
+  friend bool operator< (const CallInfo& c1, const CallInfo& c2);
 };
 
 struct HavocInfo {
@@ -308,7 +311,7 @@ public:
   /// @brief Set of used array names for this state.  Used to avoid collisions.
   ImmutableSet<std::string> arrayNames;
 
-  std::vector<CallInfo> callPath;
+  ImmutableSet<CallInfo> callPath;
   SymbolSet relevantSymbols;
 
   /// @brief: a flag indicating that the state is genuine and not

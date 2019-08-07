@@ -248,8 +248,8 @@ class CallTree {
   std::vector<std::vector<CallPathTip*> > groupChildren();
 public:
   CallTree():children(), tip(){};
-  void addCallPath(std::vector<CallInfo>::const_iterator path_begin,
-                   std::vector<CallInfo>::const_iterator path_end,
+  void addCallPath(ImmutableSet<CallInfo>::iterator path_begin,
+                   ImmutableSet<CallInfo>::iterator path_end,
                    unsigned path_id);
   void dumpCallPrefixes(std::list<CallInfo> accumulated_prefix,
                         std::list<const std::vector<ref<Expr> >* >
@@ -930,9 +930,7 @@ void KleeHandler::processCallPath(const ExecutionState &state) {
   std::stringstream filename;
   filename << "call-path" << std::setfill('0') << std::setw(6) << id << '.' << "txt";
   llvm::raw_ostream *file = openOutputFile(filename.str());
-  for (std::vector<CallInfo>::const_iterator iter = state.callPath.begin(),
-         end = state.callPath.end(); iter != end; ++iter) {
-    const CallInfo& ci = *iter;
+  for (auto& ci : state.callPath) {
     bool dumped = dumpCallInfo(ci, *file);
     if (!dumped) break;
   }
@@ -960,7 +958,7 @@ void KleeHandler::dumpCallPath(const ExecutionState &state, llvm::raw_ostream *f
   std::vector<klee::ref<klee::Expr> > evalExprs;
   std::vector<const klee::Array *> evalArrays;
 
-  for (auto ci : state.callPath) {
+  for (auto& ci : state.callPath) {
     for (auto e : ci.extraPtrs) {
       if (e.second.pointee.doTraceValueIn) {
         evalExprs.push_back(e.second.pointee.inVal);
@@ -984,9 +982,7 @@ void KleeHandler::dumpCallPath(const ExecutionState &state, llvm::raw_ostream *f
   *file << kleaverROS.str();
 
   *file <<";;-- Calls --\n";
-  for (std::vector<CallInfo>::const_iterator iter = state.callPath.begin(),
-         end = state.callPath.end(); iter != end; ++iter) {
-    const CallInfo& ci = *iter;
+  for (auto& ci : state.callPath) {
     bool dumped = dumpCallInfo(ci, *file);
     if (!dumped) break;
   }
@@ -1078,14 +1074,14 @@ std::string KleeHandler::getRunTimeLibraryPath(const char *argv0) {
   return libDir.str();
 }
 
-void CallTree::addCallPath(std::vector<CallInfo>::const_iterator path_begin,
-                           std::vector<CallInfo>::const_iterator path_end,
+void CallTree::addCallPath(ImmutableSet<CallInfo>::iterator path_begin,
+                           ImmutableSet<CallInfo>::iterator path_end,
                            unsigned path_id) {
   //TODO: do we process constraints (what if they are different from the old ones?)
   //TODO: record assumptions for each item in the call-path, because, when
   // comparing two paths in the tree they may differ only by the assumptions.
   if (path_begin == path_end) return;
-  std::vector<CallInfo>::const_iterator next = path_begin;
+  ImmutableSet<CallInfo>::iterator next = path_begin;
   ++next;
   std::vector<CallTree*>::iterator i = children.begin(), ie = children.end();
   for (; i != ie; ++i) {
