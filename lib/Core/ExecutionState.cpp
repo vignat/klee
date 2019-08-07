@@ -126,15 +126,15 @@ ExecutionState::~ExecutionState() {
       delete mo;
   }
 
-  for(auto it = havocs.begin(); it != havocs.end(); ++it) {
-    const MemoryObject *mo = it->first;
+  for(auto& it : havocs) {
+    const MemoryObject *mo = it.first;
     assert(mo->refCount > 0);
     mo->refCount--;
     if (mo->refCount == 0)
       delete mo;
   }
-  for(auto it = noHavocs.begin(); it != noHavocs.end(); ++it) {
-    const MemoryObject *mo = it->first;
+  for(auto& it : noHavocs) {
+    const MemoryObject *mo = it.first;
     assert(mo->refCount > 0);
     mo->refCount--;
     if (mo->refCount == 0)
@@ -196,11 +196,11 @@ ExecutionState::ExecutionState(const ExecutionState& state):
 
   for (auto cur_mergehandler: openMergeStack)
     cur_mergehandler->addOpenState(this);
-  for(auto it = havocs.begin(); it != havocs.end(); ++it) {
-    it->first->refCount++;
+  for(auto& it : havocs) {
+    it.first->refCount++;
   }
-  for(auto it = noHavocs.begin(); it != noHavocs.end(); ++it) {
-    it->first->refCount++;
+  for(auto& it : noHavocs) {
+    it.first->refCount++;
   }
   LOG_LA("Cloning ES " << (void*)this << " from " << (void*)&state);
 }
@@ -211,15 +211,20 @@ void ExecutionState::addHavocInfo(const MemoryObject *mo,
     klee_error("You must call klee_possibly_havoc(%s) outside of a "
                "loop subject to invariant analysis.", name.c_str());
   }
-  havocs[mo].name = name;
-  havocs[mo].havoced = false;
-  havocs[mo].mask = BitArray();
+  HavocInfo info = {
+    .name = name,
+    .havoced = false,
+    .mask = BitArray(),
+    .value = NULL
+  };
+
+  havocs = havocs.replace(std::make_pair(mo, info));
   mo->refCount++;
 }
 
 void ExecutionState::addNoHavocInfo(const MemoryObject *mo,
                                     const std::string &name) {
-  noHavocs[mo] = name;
+  noHavocs = noHavocs.replace(std::make_pair(mo, name));
   mo->refCount++;
 }
 
@@ -1730,9 +1735,13 @@ ExecutionState *LoopInProcess::makeRestartState() {
 
     if (havoc_info != newState->havocs.end()) {
       // Remember the generated value for later reporting in the ktest file.
-      havoc_info->second.value = array;
-      havoc_info->second.havoced = true;
-      havoc_info->second.mask = BitArray(*bytes, bytes->size());
+      HavocInfo newInfo = {
+        .name = havoc_info->second.name,
+        .havoced = true,
+        .mask = BitArray(*bytes, bytes->size()),
+        .value = array
+      };
+      newState->havocs = newState->havocs.replace(std::make_pair(mo, newInfo));
       LOG_LA("Adding havoc here: " << havoc_info->second.name << " in: " << (void*)newState);
     }
 

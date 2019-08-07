@@ -292,21 +292,21 @@ public:
 
   /// @brief The list of possibly havoced memory locations with their names
   ///  and values placed at the last havoc event.
-  std::map<const MemoryObject *, HavocInfo> havocs;
+  ImmutableMap<const MemoryObject *, HavocInfo> havocs;
 
   /// @brief The list of never havoced memory locations with their names.
-  std::map<const MemoryObject *, std::string> noHavocs;
+  ImmutableMap<const MemoryObject *, std::string> noHavocs;
 
   /// @brief The list of registered havoc mem location names, used to guarantee
   ///  uniqueness of each name.
-  std::set<std::string> havocNames;
+  ImmutableSet<std::string> havocNames;
 
   /// @brief The list of registered never-havoc mem location names, used to guarantee
   ///  uniqueness of each name.
-  std::set<std::string> noHavocNames;
+  ImmutableSet<std::string> noHavocNames;
 
   /// @brief Set of used array names for this state.  Used to avoid collisions.
-  std::set<std::string> arrayNames;
+  ImmutableSet<std::string> arrayNames;
 
   std::vector<CallInfo> callPath;
   SymbolSet relevantSymbols;

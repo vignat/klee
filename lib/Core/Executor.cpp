@@ -3772,9 +3772,10 @@ void Executor::executeMakeSymbolic(ExecutionState &state,
     // or if that fails try adding a unique identifier.
     unsigned id = 0;
     std::string uniqueName = name;
-    while (!state.arrayNames.insert(uniqueName).second) {
+    while (state.arrayNames.find(uniqueName) != state.arrayNames.end()) {
       uniqueName = name + "_" + llvm::utostr(++id);
     }
+    state.arrayNames = state.arrayNames.insert(uniqueName);
     const Array *array = arrayCache.CreateArray(uniqueName, mo->size);
     bindObjectInState(state, mo, false, array);
     state.addSymbolic(mo, array);
@@ -3850,9 +3851,10 @@ void Executor::executePossiblyHavoc(ExecutionState &state,
 
   unsigned id = 0;
   std::string uniqueName = name;
-  while (!state.havocNames.insert(uniqueName).second) {
+  while (state.havocNames.find(uniqueName) != state.havocNames.end()) {
     uniqueName = name + "_" + llvm::utostr(++id);
   }
+  state.havocNames = state.havocNames.insert(uniqueName);
 
   state.addHavocInfo(mo, uniqueName);
 }
@@ -3869,9 +3871,10 @@ void Executor::executeNeverHavoc(ExecutionState &state,
 
   unsigned id = 0;
   std::string uniqueName = name;
-  while (!state.noHavocNames.insert(uniqueName).second) {
+  while (state.noHavocNames.find(uniqueName) != state.noHavocNames.end()) {
     uniqueName = name + "_" + llvm::utostr(++id);
   }
+  state.noHavocNames = state.noHavocNames.insert(uniqueName);
 
   state.addNoHavocInfo(mo, uniqueName);
 }
@@ -4077,11 +4080,11 @@ bool Executor::getSymbolicSolution(const ExecutionState &state,
   std::vector<BitArray> havoc_masks;
   for (unsigned i = 0; i != state.symbolics.size(); ++i)
     objects.push_back(state.symbolics[i].second);
-  for (auto i = state.havocs.begin(); i != state.havocs.end(); ++i) {
-    if (i->second.havoced) {
-      objects.push_back(i->second.value);
-      havoc_names.push_back(i->second.name);
-      havoc_masks.push_back(i->second.mask);
+  for (auto& i : state.havocs) {
+    if (i.second.havoced) {
+      objects.push_back(i.second.value);
+      havoc_names.push_back(i.second.name);
+      havoc_masks.push_back(i.second.mask);
     }
   }
   bool success = solver->getInitialValues(tmp, objects, values);
